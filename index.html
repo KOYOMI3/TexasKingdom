@@ -316,6 +316,37 @@
     .btn-fold { background: #e74c3c; color: white; }
     .btn-call { background: #2ecc71; color: white; }
     .btn-raise { background: #e67e22; color: white; }
+
+    /* Show/Muck prompt */
+    .show-prompt {
+        display: flex; flex-direction: column; align-items: center;
+        gap: 12px; padding: 10px;
+    }
+    .show-prompt .prompt-text {
+        font-size: 15px; font-weight: bold; color: #f1c40f;
+        letter-spacing: 0.1em;
+    }
+    .show-prompt .prompt-timer {
+        font-size: 28px; font-weight: bold; color: #e74c3c;
+        font-family: 'Courier New', monospace;
+    }
+    .show-prompt .prompt-buttons {
+        display: flex; gap: 12px;
+    }
+    .show-prompt .btn-show {
+        padding: 10px 28px; font-size: 16px; font-weight: bold;
+        background: #3498db; color: white; border: none;
+        border-radius: 5px; cursor: pointer; font-family: inherit;
+        transition: 0.2s; min-width: 100px;
+    }
+    .show-prompt .btn-show:hover { background: #2980b9; transform: translateY(-2px); }
+    .show-prompt .btn-muck {
+        padding: 10px 28px; font-size: 16px; font-weight: bold;
+        background: #7f8c8d; color: white; border: none;
+        border-radius: 5px; cursor: pointer; font-family: inherit;
+        transition: 0.2s; min-width: 100px;
+    }
+    .show-prompt .btn-muck:hover { background: #95a5a6; transform: translateY(-2px); }
 </style>
 </head>
 <body>
@@ -359,7 +390,10 @@
     <div class="player-list" id="lobby-players"></div>
 
     <div class="lobby-note" id="lobby-note-2p" style="display:none">
-        💡 当前只有 2 位真人玩家，开始时将自动添加 1 个 AI (Tan Xuan) 凑成 3 人桌
+        💡 当前只有 2 位真人玩家，开始时将自动添加 2 个 AI (Tan Xuan + Elton Tsang) 凑成 4 人桌
+    </div>
+    <div class="lobby-note" id="lobby-note-3p" style="display:none">
+        💡 当前只有 3 位真人玩家，开始时将自动添加 1 个 AI (Tan Xuan) 凑成 4 人桌
     </div>
     <div class="lobby-note" id="lobby-note-wait" style="display:none">
         ⏳ 等待房主开始游戏…
@@ -414,6 +448,14 @@
                 <button class="action-btn btn-raise" id="btn-raise">确认加注</button>
             </div>
         </div>
+        <div class="show-prompt" id="show-prompt" style="display:none">
+            <div class="prompt-text">你赢得了底池！要亮牌吗？</div>
+            <div class="prompt-timer" id="show-timer">3</div>
+            <div class="prompt-buttons">
+                <button class="btn-show" id="btn-show-cards">亮牌 (Show)</button>
+                <button class="btn-muck" id="btn-muck-cards">不亮 (Muck)</button>
+            </div>
+        </div>
     </div>
 </div>
 
@@ -437,15 +479,19 @@ const MAX_HUMANS = 4;
 const MIN_HUMANS = 2;
 const BLIND_SB = 1000;
 const BLIND_BB = 2000;
-const BUY_IN = 300000;
+const BUY_IN = 200000;
 const AI_NAME = 'Tan Xuan';
 const AI_CID = 'AI-BOT-01';
+const AI_NAME_2 = 'Elton Tsang';
+const AI_CID_2 = 'AI-BOT-02';
 const SUITS = ['♥', '♦', '♣', '♠'];
 const VALUES = ['6', '7', '8', '9', '10', 'J', 'Q', 'K', 'A'];
 
 const JOIN_TIMEOUT = 4000;
 const AI_THINK_MS = 1200;
 const NEXT_HAND_DELAY = 5000;
+const SHOW_CARD_TIMEOUT = 3000;
+const SHOW_CARD_DISPLAY = 5000;
 
 // ==========================================================
 // STATE
@@ -612,24 +658,33 @@ function handleStateUpdate(msg) {
     // If we were joining, we should now see ourselves in players
     if (state.screen === 'joining') {
         if (state.joinTimer) { clearTimeout(state.joinTimer); state.joinTimer = null; }
-        // Check room state
-        if (msg.phase === 'playing') {
-            showError('该房间已在进行牌局，无法加入');
+        // Check room ended
+        if (msg.phase === 'ended') {
+            showError('该房间已结束');
             leaveRoomClient();
             return;
         }
-        // Check if we're already in players
+        // Check if full
+        const humanCount = msg.players.filter(p => p && !p.isAI).length;
         const inList = msg.players.some(p => p && p.cid === CLIENT_ID);
+        if (!inList && humanCount >= MAX_HUMANS) {
+            showError('房间已满');
+            leaveRoomClient();
+            return;
+        }
         if (!inList) {
-            // Send join request
+            // Send join request (works for both lobby and mid-game)
             publish(topicAction(state.roomCode), {
                 type: 'join', cid: CLIENT_ID, name: state.myName,
             });
-            // The state will update again when host processes our join
             return;
         }
-        // We're in - go to lobby
-        state.screen = 'lobby';
+        // We're in — go to lobby or directly to game
+        if (msg.phase === 'playing') {
+            state.screen = 'game';
+        } else {
+            state.screen = 'lobby';
+        }
         render();
         return;
     }
@@ -747,16 +802,33 @@ function leaveRoomClient() {
 
 function hostOnJoinRequest(cid, name) {
     if (!hostGame) return;
-    if (hostGame.phase !== 'lobby') return; // No joining mid-game
+    if (hostGame.phase === 'ended') return;
     if (hostGame.players.some(p => p && p.cid === cid)) {
+        // Already in — if they were sitting out (reconnect), mark them back
+        const existing = hostGame.players.find(p => p.cid === cid);
+        if (existing && existing.sittingOut) {
+            // They'll rejoin next hand automatically
+            hostLog(`${existing.name} 重新连接，将在下一手加入`);
+        }
         hostPublishState();
         return;
     }
     const humanCount = hostGame.players.filter(p => !p.isAI).length;
     if (humanCount >= MAX_HUMANS) return; // full
 
-    hostGame.players.push(makePlayerObj(cid, name, false));
-    hostLog(`${name} 加入了房间`);
+    const newPlayer = makePlayerObj(cid, name, false);
+
+    if (hostGame.phase === 'playing') {
+        // Mid-game join: sit out for current hand, join next hand
+        newPlayer.sittingOut = true;
+        newPlayer.folded = true;
+        newPlayer.acted = true;
+        hostGame.players.push(newPlayer);
+        hostLog(`${name} 加入房间，将在下一手入座`);
+    } else {
+        hostGame.players.push(newPlayer);
+        hostLog(`${name} 加入了房间`);
+    }
     hostPublishState();
 }
 
@@ -811,10 +883,12 @@ function hostStartGame() {
         hostPublishState();
         return;
     }
+    // Pad to 4 with AIs
     if (humans.length === 2) {
-        // Add AI at a random position
-        const insertAt = Math.random() < 0.5 ? 1 : 2;
-        hostGame.players.splice(insertAt, 0, makePlayerObj(AI_CID, AI_NAME, true));
+        hostGame.players.splice(1, 0, makePlayerObj(AI_CID, AI_NAME, true));
+        hostGame.players.splice(3, 0, makePlayerObj(AI_CID_2, AI_NAME_2, true));
+    } else if (humans.length === 3) {
+        hostGame.players.splice(2, 0, makePlayerObj(AI_CID, AI_NAME, true));
     }
     hostGame.phase = 'playing';
     hostGame.dealerIdx = 0;
@@ -824,6 +898,42 @@ function hostStartGame() {
 function hostStartHand() {
     if (!hostGame || hostGame.phase !== 'playing') return;
 
+    // Bring back any sitting-out players for this hand
+    hostGame.players.forEach(p => {
+        if (p.sittingOut && !p.isAI) {
+            p.sittingOut = false;
+            if (p.chips <= 0) { p.chips = BUY_IN; p.totalBuyIn += BUY_IN; }
+        }
+    });
+
+    // If humans >= 4, remove ALL AIs
+    // If humans == 3, keep exactly 1 AI (Tan Xuan)
+    // If humans == 2, keep exactly 2 AIs (Tan Xuan + Elton Tsang)
+    const humanCount = hostGame.players.filter(p => !p.isAI && !p.sittingOut).length;
+    const ais = hostGame.players.filter(p => p.isAI);
+    let targetAIs = 0;
+    if (humanCount === 2) targetAIs = 2;
+    else if (humanCount === 3) targetAIs = 1;
+
+    // Remove excess AIs
+    while (ais.length > targetAIs) {
+        const removeAI = ais.pop();
+        const idx = hostGame.players.indexOf(removeAI);
+        if (idx >= 0) hostGame.players.splice(idx, 1);
+    }
+    // Add missing AIs
+    if (ais.length < targetAIs && ais.length === 0) {
+        const pos = Math.floor(Math.random() * (hostGame.players.length + 1));
+        hostGame.players.splice(pos, 0, makePlayerObj(AI_CID, AI_NAME, true));
+        ais.push(hostGame.players[pos]);
+    }
+    if (ais.length < targetAIs && ais.length === 1) {
+        const pos = Math.floor(Math.random() * (hostGame.players.length + 1));
+        hostGame.players.splice(pos, 0, makePlayerObj(AI_CID_2, AI_NAME_2, true));
+    }
+    // Fix dealerIdx
+    if (hostGame.dealerIdx >= hostGame.players.length) hostGame.dealerIdx = 0;
+
     hostGame.handId++;
     hostGame.deck = buildDeck();
     hostGame.communityCards = [];
@@ -831,6 +941,9 @@ function hostStartHand() {
     hostGame.highestBet = BLIND_BB;
     hostGame.stage = 0;
     hostGame.showAllCards = false;
+    hostGame.pendingShow = null;
+    hostGame.shownCards = null;
+    if (hostGame._showTimer) { clearTimeout(hostGame._showTimer); hostGame._showTimer = null; }
 
     hostGame.players.forEach(p => {
         if (p.chips <= 0 && !p.sittingOut) {
@@ -908,14 +1021,57 @@ function hostIsRoundOver() {
 function hostCheckEarlyWin() {
     const alive = hostGame.players.filter(p => !p.folded);
     if (alive.length === 1) {
-        alive[0].chips += hostGame.pot;
+        const winner = alive[0];
+        winner.chips += hostGame.pot;
         hostGame.pot = 0;
-        alive[0].isWinner = true;
-        hostLog(`${alive[0].name} 赢得底池 <br><span style="font-size:13px;color:#bdc3c7;">(其他人已弃牌)</span>`);
-        hostEndHand(false);
+        winner.isWinner = true;
+        hostLog(`${winner.name} 赢得底池 <br><span style="font-size:13px;color:#bdc3c7;">(其他人已弃牌)</span>`);
+
+        if (!winner.isAI) {
+            // Human winner: offer show/muck choice with 3s timeout
+            hostGame.pendingShow = {
+                winnerCid: winner.cid,
+                deadline: Date.now() + SHOW_CARD_TIMEOUT,
+            };
+            hostGame.stage = 4; // stop play
+            hostPublishState();
+            // Fallback timeout: auto-muck after 3 seconds
+            hostGame._showTimer = setTimeout(() => {
+                if (hostGame && hostGame.pendingShow) {
+                    hostResolvePendingShow(false);
+                }
+            }, SHOW_CARD_TIMEOUT + 200); // slight buffer
+        } else {
+            hostEndHand(false);
+        }
         return true;
     }
     return false;
+}
+
+function hostResolvePendingShow(doShow) {
+    if (!hostGame || !hostGame.pendingShow) return;
+    if (hostGame._showTimer) { clearTimeout(hostGame._showTimer); hostGame._showTimer = null; }
+
+    const winnerCid = hostGame.pendingShow.winnerCid;
+    const winner = hostGame.players.find(p => p.cid === winnerCid);
+
+    if (doShow && winner) {
+        // Broadcast the winner's cards for all to see for SHOW_CARD_DISPLAY ms, then next hand immediately
+        hostGame.shownCards = { cid: winnerCid, cards: winner.hand };
+        hostGame.pendingShow = null;
+        hostPublishState();
+        setTimeout(() => {
+            if (!hostGame) return;
+            hostGame.shownCards = null;
+            hostEndHand(false, 0); // No extra delay — cards already showed for 5s
+        }, SHOW_CARD_DISPLAY);
+    } else {
+        // Muck: short delay then next hand
+        hostGame.pendingShow = null;
+        hostGame.shownCards = null;
+        hostEndHand(false, 1500);
+    }
 }
 
 function hostProcessTurn() {
@@ -1004,6 +1160,15 @@ function hostApplyAction(p, actionType, amount) {
 // ==========================================================
 function hostOnPlayerAction(cid, msg) {
     if (!hostGame || hostGame.phase !== 'playing') return;
+
+    // Handle show/muck actions
+    if (msg.action === 'show' || msg.action === 'muck') {
+        if (hostGame.pendingShow && hostGame.pendingShow.winnerCid === cid) {
+            hostResolvePendingShow(msg.action === 'show');
+        }
+        return;
+    }
+
     const p = hostGame.players[hostGame.currentIdx];
     if (!p || p.cid !== cid) return; // Not their turn
     if (p.folded || p.isAllIn) return;
@@ -1070,10 +1235,10 @@ function hostShowdown() {
     hostEndHand(true);
 }
 
-function hostEndHand(isShowdown) {
+function hostEndHand(isShowdown, customDelay) {
     hostGame.stage = 4;
     hostPublishState();
-    // Schedule next hand
+    const delay = (customDelay !== undefined) ? customDelay : NEXT_HAND_DELAY;
     setTimeout(() => {
         if (!hostGame || hostGame.phase !== 'playing') return;
         // Check if any humans left
@@ -1087,7 +1252,7 @@ function hostEndHand(isShowdown) {
         // Advance dealer button
         hostGame.dealerIdx = findNextActive(hostGame.dealerIdx);
         hostStartHand();
-    }, NEXT_HAND_DELAY);
+    }, delay);
 }
 
 // ==========================================================
@@ -1105,15 +1270,20 @@ function hostPublishState() {
         v: nextVersion++,
         phase: hostGame.phase,
         hostId: CLIENT_ID,
-        players: hostGame.players.map(p => ({
-            cid: p.cid, name: p.name, isAI: p.isAI,
-            chips: p.chips, buyIn: p.totalBuyIn,
-            curBet: p.currentBet, totalC: p.totalContribution,
-            folded: p.folded, acted: p.acted, allIn: p.isAllIn,
-            winner: p.isWinner, actStr: p.actionStr,
-            handName: p.handName, sittingOut: p.sittingOut,
-            hand: (hostGame.showAllCards && !p.folded) ? p.hand : null,
-        })),
+        players: hostGame.players.map(p => {
+            // Show hand if: showdown, or shownCards matches this player
+            const showHand = (hostGame.showAllCards && !p.folded) ||
+                (hostGame.shownCards && hostGame.shownCards.cid === p.cid);
+            return {
+                cid: p.cid, name: p.name, isAI: p.isAI,
+                chips: p.chips, buyIn: p.totalBuyIn,
+                curBet: p.currentBet, totalC: p.totalContribution,
+                folded: p.folded, acted: p.acted, allIn: p.isAllIn,
+                winner: p.isWinner, actStr: p.actionStr,
+                handName: p.handName, sittingOut: p.sittingOut,
+                hand: showHand ? p.hand : null,
+            };
+        }),
         community: hostGame.communityCards,
         pot: hostGame.pot,
         maxBet: hostGame.highestBet,
@@ -1124,6 +1294,8 @@ function hostPublishState() {
         msg: hostGame.msg,
         msgId: hostGame.msgId,
         showAll: hostGame.showAllCards,
+        pendingShow: hostGame.pendingShow || null,
+        shownCards: hostGame.shownCards || null,
     };
     state.pub = pub; // Also update host's local view
     publish(topicState(state.roomCode), pub, { retain: true });
@@ -1205,7 +1377,9 @@ function hostExecuteAI(p) {
             }
         }
     } else if (hostGame.stage === 3 && evaluate7Cards([...p.hand, ...hostGame.communityCards]).rank <= 2) {
-        const bluffRaise = 0.25, bluffBet = 0.45;
+        const isTan = p.name === AI_NAME;
+        const bluffRaise = isTan ? 0.25 : 0.12;
+        const bluffBet = isTan ? 0.45 : 0.25;
         if (amountToCall > 0) {
             if (rand < bluffRaise) { action = 'raise'; targetRaiseTo = hostGame.highestBet + Math.floor(hostGame.pot * (0.5 + Math.random() * 0.5)); hostLog(`💥 ${p.name} 河牌诈唬！`); }
             else action = 'fold';
@@ -1216,6 +1390,7 @@ function hostExecuteAI(p) {
     } else {
         const cannotFold = (handStrength >= 0.6) || (handStrength >= 0.5 && betRatio <= 0.6);
         const stdBet = Math.floor(hostGame.pot * (0.33 + Math.random() * 0.17));
+        const isTan = p.name === AI_NAME;
 
         if (amountToCall === 0) {
             if (isStrongDraw && rand < 0.75) {
@@ -1227,13 +1402,27 @@ function hostExecuteAI(p) {
                 action = 'raise'; targetRaiseTo = hostGame.highestBet + stdBet;
             } else action = 'call';
         } else {
-            // Aggressive AI (Tan Xuan style)
-            if (handStrength > 0.65) { action = 'raise'; targetRaiseTo = hostGame.highestBet + stdBet; }
-            else if (handStrength > 0.45 || isStrongDraw) { action = 'call'; }
-            else {
-                if (betRatio > 1.0) action = rand < 0.2 ? 'raise' : 'fold';
-                else action = rand < 0.3 ? 'call' : 'fold';
-                targetRaiseTo = hostGame.highestBet + stdBet;
+            if (isTan) {
+                // Tan Xuan: aggressive
+                if (handStrength > 0.65) { action = 'raise'; targetRaiseTo = hostGame.highestBet + stdBet; }
+                else if (handStrength > 0.45 || isStrongDraw) { action = 'call'; }
+                else {
+                    if (betRatio > 1.0) action = rand < 0.2 ? 'raise' : 'fold';
+                    else action = rand < 0.3 ? 'call' : 'fold';
+                    targetRaiseTo = hostGame.highestBet + stdBet;
+                }
+            } else {
+                // Elton Tsang: calculated
+                if (handStrength > 0.7) { action = rand < 0.4 ? 'call' : 'raise'; targetRaiseTo = hostGame.highestBet + stdBet; }
+                else if (handStrength > 0.45 || isStrongDraw) {
+                    if (potOdds < 0.35) action = 'call';
+                    else action = rand < 0.2 ? 'raise' : (cannotFold ? 'call' : 'fold');
+                    targetRaiseTo = hostGame.highestBet + stdBet;
+                } else {
+                    if (betRatio > 0.6) action = rand < 0.1 ? 'raise' : 'fold';
+                    else action = rand < 0.2 ? 'call' : 'fold';
+                    targetRaiseTo = hostGame.highestBet + stdBet;
+                }
             }
             if (action === 'fold' && cannotFold) {
                 action = (betRatio > 1.5 && handStrength < 0.75) ? 'fold' : 'call';
@@ -1274,36 +1463,109 @@ function buildDeck() {
 function evaluate7Cards(cards) {
     const sorted = cards.slice().sort((a, b) => b.weight - a.weight);
     const weights = sorted.map(c => c.weight);
-    const suitCount = {};
-    cards.forEach(c => suitCount[c.suit] = (suitCount[c.suit] || 0) + 1);
-    const isFlush = Object.values(suitCount).some(v => v >= 5);
 
+    // Suit grouping
+    const bySuit = {};
+    cards.forEach(c => {
+        if (!bySuit[c.suit]) bySuit[c.suit] = [];
+        bySuit[c.suit].push(c.weight);
+    });
+    // Sort each suit descending
+    for (const s in bySuit) bySuit[s].sort((a, b) => b - a);
+
+    // Check straight flush: find 5 consecutive cards in the same suit
+    let straightFlushHigh = 0;
+    for (const s in bySuit) {
+        const sw = [...new Set(bySuit[s])];
+        // Check A-low straight (A6789 → weight 14,6,7,8,9)
+        if (sw.includes(14)) sw.push(5); // A acts as 5 for A-6-7-8-9
+        sw.sort((a, b) => b - a);
+        for (let i = 0; i <= sw.length - 5; i++) {
+            if (sw[i] - sw[i + 4] === 4) {
+                straightFlushHigh = Math.max(straightFlushHigh, sw[i]);
+                break;
+            }
+        }
+    }
+
+    // Weight counts
     const weightCount = {};
     weights.forEach(w => weightCount[w] = (weightCount[w] || 0) + 1);
-    const counts = Object.entries(weightCount).sort((a, b) => b[1] - a[1] || b[0] - a[0]);
+    const counts = Object.entries(weightCount)
+        .map(([w, c]) => [parseInt(w), c])
+        .sort((a, b) => b[1] - a[1] || b[0] - a[0]);
 
+    // Flush: best 5 of the flush suit
+    let isFlush = false;
+    let flushHigh = 0;
+    for (const s in bySuit) {
+        if (bySuit[s].length >= 5) {
+            isFlush = true;
+            flushHigh = bySuit[s][0]; // already sorted desc
+            break;
+        }
+    }
+
+    // Straight (any suits)
     const uniqueW = [...new Set(weights)];
+    if (uniqueW.includes(14)) uniqueW.push(5); // A-low
+    uniqueW.sort((a, b) => b - a);
     let isStraight = false, straightHigh = 0;
     for (let i = 0; i <= uniqueW.length - 5; i++) {
-        if (uniqueW[i] - uniqueW[i + 4] === 4) { isStraight = true; straightHigh = uniqueW[i]; break; }
-    }
-    if (!isStraight && uniqueW.includes(14) && uniqueW.includes(9) && uniqueW.includes(8) && uniqueW.includes(7) && uniqueW.includes(6)) {
-        isStraight = true; straightHigh = 9;
+        if (uniqueW[i] - uniqueW[i + 4] === 4) {
+            isStraight = true; straightHigh = uniqueW[i]; break;
+        }
     }
 
-    let rank = 0, name = '高牌';
-    if (isStraight && isFlush) { rank = 8; name = '同花顺'; }
-    else if (counts[0][1] === 4) { rank = 7; name = '四条'; }
-    else if (isFlush) { rank = 6; name = '同花'; }
-    else if (counts[0][1] === 3 && counts[1] && counts[1][1] >= 2) { rank = 5; name = '葫芦'; }
-    else if (isStraight) { rank = 4; name = '顺子'; }
-    else if (counts[0][1] === 3) { rank = 3; name = '三条'; }
-    else if (counts[0][1] === 2 && counts[1] && counts[1][1] === 2) { rank = 2; name = '两对'; }
-    else if (counts[0][1] === 2) { rank = 1; name = '一对'; }
+    // Determine hand rank
+    let rank = 0, name = '高牌', score = 0;
 
-    const pw = parseInt(counts[0][0]);
-    const sw = counts[1] ? parseInt(counts[1][0]) : 0;
-    const score = rank * 1e10 + pw * 1e8 + sw * 1e6;
+    if (straightFlushHigh > 0) {
+        rank = 8; name = '同花顺';
+        score = rank * 1e10 + straightFlushHigh * 1e8;
+    } else if (counts[0][1] === 4) {
+        rank = 7; name = '四条';
+        const quadW = counts[0][0];
+        const kicker = weights.find(w => w !== quadW) || 0;
+        score = rank * 1e10 + quadW * 1e8 + kicker * 1e6;
+    } else if (isFlush) {
+        // Short deck rule: 同花 > 葫芦
+        rank = 6; name = '同花';
+        // Use top 5 flush cards for comparison
+        const flushSuit = Object.keys(bySuit).find(s => bySuit[s].length >= 5);
+        const top5 = bySuit[flushSuit].slice(0, 5);
+        score = rank * 1e10 + top5[0] * 1e8 + top5[1] * 1e6 + top5[2] * 1e4 + top5[3] * 100 + top5[4];
+    } else if (counts[0][1] === 3 && counts.length > 1 && counts[1][1] >= 2) {
+        rank = 5; name = '葫芦';
+        score = rank * 1e10 + counts[0][0] * 1e8 + counts[1][0] * 1e6;
+    } else if (isStraight) {
+        rank = 4; name = '顺子';
+        score = rank * 1e10 + straightHigh * 1e8;
+    } else if (counts[0][1] === 3) {
+        rank = 3; name = '三条';
+        const tripleW = counts[0][0];
+        const kickers = weights.filter(w => w !== tripleW).slice(0, 2);
+        score = rank * 1e10 + tripleW * 1e8 + (kickers[0] || 0) * 1e6 + (kickers[1] || 0) * 1e4;
+    } else if (counts[0][1] === 2 && counts.length > 1 && counts[1][1] === 2) {
+        rank = 2; name = '两对';
+        // Top two pairs (sorted desc by weight)
+        const pairs = counts.filter(c => c[1] === 2).map(c => c[0]).sort((a, b) => b - a);
+        const hiPair = pairs[0];
+        const loPair = pairs[1];
+        // Kicker: best card not in either pair
+        const kicker = weights.find(w => w !== hiPair && w !== loPair) || 0;
+        score = rank * 1e10 + hiPair * 1e8 + loPair * 1e6 + kicker * 1e4;
+    } else if (counts[0][1] === 2) {
+        rank = 1; name = '一对';
+        const pairW = counts[0][0];
+        const kickers = weights.filter(w => w !== pairW).slice(0, 3);
+        score = rank * 1e10 + pairW * 1e8 + (kickers[0] || 0) * 1e6 + (kickers[1] || 0) * 1e4 + (kickers[2] || 0) * 100;
+    } else {
+        // High card
+        const top5 = weights.slice(0, 5);
+        score = top5[0] * 1e8 + (top5[1] || 0) * 1e6 + (top5[2] || 0) * 1e4 + (top5[3] || 0) * 100 + (top5[4] || 0);
+    }
+
     return { rank, name, score };
 }
 
@@ -1438,8 +1700,10 @@ function renderLobby() {
     const humans = state.pub ? state.pub.players.filter(p => !p.isAI) : [];
     document.getElementById('lobby-note-2p').style.display =
         (state.iAmHost && humans.length === 2) ? 'block' : 'none';
+    document.getElementById('lobby-note-3p').style.display =
+        (state.iAmHost && humans.length === 3) ? 'block' : 'none';
     document.getElementById('lobby-note-wait').style.display =
-        (!state.iAmHost && humans.length >= 2) ? 'block' : 'none';
+        (!state.iAmHost && humans.length >= MIN_HUMANS) ? 'block' : 'none';
     document.getElementById('lobby-note-full').style.display =
         (humans.length >= MAX_HUMANS) ? 'block' : 'none';
 
@@ -1447,7 +1711,9 @@ function renderLobby() {
     if (state.iAmHost && humans.length >= MIN_HUMANS) {
         startBtn.style.display = 'block';
         startBtn.disabled = false;
-        startBtn.textContent = humans.length === 2 ? '开始游戏 (+AI)' : '开始游戏';
+        if (humans.length === 2) startBtn.textContent = '开始游戏 (+2 AI)';
+        else if (humans.length === 3) startBtn.textContent = '开始游戏 (+1 AI)';
+        else startBtn.textContent = '开始游戏';
     } else if (state.iAmHost) {
         startBtn.style.display = 'block';
         startBtn.disabled = true;
@@ -1513,11 +1779,12 @@ function renderGame() {
         if (gameIdx === (pub.dealer + 1) % numP) badges += `<span class="badge badge-sb">SB</span>`;
         if (gameIdx === (pub.dealer + 2) % numP) badges += `<span class="badge badge-bb">BB</span>`;
 
-        // Cards: show face-up for me (from private hand) or at showdown (from pub.hand)
+        // Cards: show face-up for me (from private hand), at showdown, or when shown after fold-win
         let cardsHtml = '';
+        const isShownByChoice = pub.shownCards && pub.shownCards.cid === p.cid && p.hand;
         if (isMe && state.myHand && state.myHand.handId === pub.handId) {
             cardsHtml = state.myHand.cards.map(c => renderCardHtml(c, false)).join('');
-        } else if (p.hand && pub.showAll && !p.folded) {
+        } else if (p.hand && (pub.showAll && !p.folded || isShownByChoice)) {
             cardsHtml = p.hand.map(c => renderCardHtml(c, false)).join('');
         } else if (p.sittingOut) {
             cardsHtml = '';
@@ -1550,13 +1817,57 @@ function renderGame() {
 
     // Controls — only enabled when it's my turn
     const myPubIdx = players.findIndex(p => p && p.cid === CLIENT_ID);
+    const iAmSittingOut = myPubIdx >= 0 && players[myPubIdx].sittingOut;
     const isMyTurn = myPubIdx >= 0 && pub.current === myPubIdx
         && pub.stage >= 0 && pub.stage < 4
-        && !players[myPubIdx].folded && !players[myPubIdx].allIn;
-    if (isMyTurn) {
-        enableActionControls(players[myPubIdx], pub);
+        && !players[myPubIdx].folded && !players[myPubIdx].allIn
+        && !iAmSittingOut;
+
+    // Show/Muck prompt
+    const showPromptEl = document.getElementById('show-prompt');
+    const isPendingShowForMe = pub.pendingShow && pub.pendingShow.winnerCid === CLIENT_ID;
+
+    if (isPendingShowForMe && !pub.shownCards) {
+        showPromptEl.style.display = 'flex';
+        document.getElementById('action-controls').classList.add('disabled');
+        // Countdown timer
+        const remaining = Math.max(0, Math.ceil((pub.pendingShow.deadline - Date.now()) / 1000));
+        document.getElementById('show-timer').textContent = remaining;
+        if (!window._showCountdownActive) {
+            window._showCountdownActive = true;
+            window._showCountdownInterval = setInterval(() => {
+                const r = Math.max(0, Math.ceil((pub.pendingShow.deadline - Date.now()) / 1000));
+                const timerEl = document.getElementById('show-timer');
+                if (timerEl) timerEl.textContent = r;
+                if (r <= 0) {
+                    clearInterval(window._showCountdownInterval);
+                    window._showCountdownActive = false;
+                }
+            }, 200);
+        }
     } else {
-        disableActionControls();
+        showPromptEl.style.display = 'none';
+        if (window._showCountdownActive) {
+            clearInterval(window._showCountdownInterval);
+            window._showCountdownActive = false;
+        }
+        if (isMyTurn) {
+            enableActionControls(players[myPubIdx], pub);
+        } else {
+            disableActionControls();
+            if (iAmSittingOut) {
+                document.getElementById('gto-content').innerHTML =
+                    '<div style="color:#f39c12; font-size:14px;">🪑 你正在旁观，下一手自动入座</div>';
+            }
+        }
+    }
+
+    // If someone's cards are being shown (after choosing Show)
+    if (pub.shownCards) {
+        const showerName = players.find(p => p.cid === pub.shownCards.cid);
+        if (showerName) {
+            logMsg(`👀 ${showerName.name} 选择亮牌！`);
+        }
     }
 
     resizeGame();
@@ -1736,6 +2047,22 @@ document.getElementById('bet-slider').addEventListener('input', (e) => updateSli
 document.getElementById('btn-fold').addEventListener('click', () => sendAction('fold'));
 document.getElementById('btn-call').addEventListener('click', () => sendAction('call'));
 document.getElementById('btn-raise').addEventListener('click', () => sendAction('raise'));
+
+document.getElementById('btn-show-cards').addEventListener('click', () => sendShowMuck('show'));
+document.getElementById('btn-muck-cards').addEventListener('click', () => sendShowMuck('muck'));
+
+function sendShowMuck(choice) {
+    document.getElementById('show-prompt').style.display = 'none';
+    const payload = {
+        type: 'action', cid: CLIENT_ID,
+        action: choice, handId: state.pub ? state.pub.handId : 0,
+    };
+    if (state.iAmHost) {
+        hostOnPlayerAction(CLIENT_ID, payload);
+    } else {
+        publish(topicAction(state.roomCode), payload);
+    }
+}
 
 // Auto-join via URL hash: #CODE
 (function checkHashJoin() {
