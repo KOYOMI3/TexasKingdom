@@ -1,0 +1,1777 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+<title>德州扑克 · 联机版 (Short Deck)</title>
+<style>
+    * { box-sizing: border-box; }
+    body {
+        background-color: #1a3c23; color: white;
+        font-family: 'Segoe UI', Tahoma, sans-serif;
+        text-align: center; margin: 0; padding: 10px;
+        user-select: none; overflow-x: hidden;
+    }
+    h2 { margin: 5px 0 15px; color: #f1c40f; text-shadow: 1px 1px 2px #000; font-size: 22px; }
+
+    /* MQTT status */
+    .mqtt-status {
+        position: fixed; top: 10px; right: 10px;
+        font-size: 11px; letter-spacing: 0.1em; color: #bdc3c7;
+        display: flex; align-items: center; gap: 6px;
+        z-index: 10000; background: rgba(0,0,0,0.4);
+        padding: 4px 10px; border-radius: 12px;
+    }
+    .mqtt-status .dot { width: 8px; height: 8px; border-radius: 50%; background: #888; }
+    .mqtt-status.connected .dot { background: #2ecc71; }
+    .mqtt-status.connecting .dot { background: #f39c12; animation: blink 1s infinite; }
+    .mqtt-status.error .dot { background: #e74c3c; }
+    @keyframes blink { 50% { opacity: 0.3; } }
+
+    /* Home / Lobby cards */
+    .screen-card {
+        max-width: 480px; margin: 40px auto;
+        background: #2c3e50; padding: 30px 25px;
+        border-radius: 10px; box-shadow: 0 10px 30px rgba(0,0,0,0.6);
+    }
+    .screen-card h1 {
+        color: #f1c40f; font-size: 28px; margin: 0 0 8px;
+        letter-spacing: 0.1em;
+    }
+    .screen-card .subtitle {
+        color: #95a5a6; font-size: 13px; margin-bottom: 28px;
+        font-style: italic; letter-spacing: 0.1em;
+    }
+    .screen-card .field-label {
+        display: block; text-align: left; font-size: 12px;
+        color: #bdc3c7; letter-spacing: 0.15em;
+        margin: 12px 0 6px;
+    }
+    .screen-card input[type=text] {
+        width: 100%; padding: 12px; background: #1a3c23;
+        color: white; border: 1px solid #34495e;
+        border-radius: 4px; font-size: 16px; text-align: center;
+        letter-spacing: 0.2em; font-family: inherit;
+        outline: none;
+    }
+    .screen-card input[type=text]:focus { border-color: #f1c40f; }
+    .screen-card input#name-input { letter-spacing: normal; }
+    .screen-card .btn-primary {
+        width: 100%; padding: 14px; margin-top: 14px;
+        background: #f1c40f; color: #2c3e50;
+        border: none; border-radius: 4px; font-size: 16px;
+        font-weight: bold; cursor: pointer; letter-spacing: 0.2em;
+        font-family: inherit; transition: all 0.2s;
+    }
+    .screen-card .btn-primary:hover:not(:disabled) { background: #f39c12; transform: translateY(-1px); }
+    .screen-card .btn-primary:disabled { opacity: 0.4; cursor: not-allowed; }
+    .screen-card .btn-secondary {
+        width: 100%; padding: 12px; margin-top: 10px;
+        background: transparent; color: #ecf0f1;
+        border: 1px solid #7f8c8d; border-radius: 4px;
+        font-size: 15px; cursor: pointer; letter-spacing: 0.15em;
+        font-family: inherit; transition: all 0.2s;
+    }
+    .screen-card .btn-secondary:hover { background: rgba(255,255,255,0.1); }
+    .or-divider {
+        display: flex; align-items: center; gap: 12px;
+        margin: 20px 0; color: #7f8c8d; font-size: 12px;
+    }
+    .or-divider .hl { flex: 1; height: 1px; background: #34495e; }
+    .error-msg {
+        margin-top: 12px; padding: 10px;
+        background: rgba(231, 76, 60, 0.2);
+        border-left: 3px solid #e74c3c;
+        color: #e74c3c; font-size: 13px;
+        text-align: left;
+    }
+
+    /* Lobby */
+    .lobby-code {
+        font-family: 'Courier New', monospace;
+        font-size: 32px; font-weight: bold;
+        letter-spacing: 0.4em; color: #f1c40f;
+        background: #1a3c23; padding: 14px 20px;
+        border-radius: 6px; cursor: pointer;
+        border: 2px dashed #f1c40f; margin-bottom: 16px;
+        transition: all 0.2s;
+    }
+    .lobby-code:hover { background: #0f2818; }
+    .lobby-code.copied { background: #2ecc71; color: white; border-color: #2ecc71; }
+    .lobby-code-hint { font-size: 11px; color: #7f8c8d; letter-spacing: 0.1em; margin-bottom: 20px; }
+
+    .player-list {
+        background: #1a3c23; border-radius: 6px;
+        padding: 12px; margin-bottom: 20px; min-height: 60px;
+    }
+    .player-list .player-row {
+        display: flex; align-items: center; justify-content: space-between;
+        padding: 8px 10px; margin: 4px 0;
+        background: rgba(0,0,0,0.3); border-radius: 4px;
+        font-size: 14px;
+    }
+    .player-list .player-row.is-me { border-left: 3px solid #3498db; }
+    .player-list .player-row .name { text-align: left; }
+    .player-list .player-row .host-tag { color: #f1c40f; font-size: 11px; letter-spacing: 0.1em; }
+    .player-list .empty { color: #7f8c8d; font-style: italic; padding: 15px; font-size: 13px; }
+
+    .lobby-note {
+        background: rgba(52, 152, 219, 0.15);
+        border-left: 3px solid #3498db;
+        padding: 10px 12px; margin: 12px 0;
+        font-size: 12px; color: #85c1e2; text-align: left;
+        line-height: 1.5;
+    }
+
+    /* Game */
+    .game-container {
+        display: flex; justify-content: center; align-items: flex-start;
+        gap: 20px; max-width: 1250px; margin: 0 auto; flex-wrap: wrap;
+    }
+    .table-wrapper {
+        display: flex; justify-content: center;
+        width: 100%; max-width: 1050px; height: 600px; position: relative;
+    }
+    .table {
+        position: relative;
+        background: radial-gradient(circle, #2b5e34 0%, #1e4224 100%);
+        border: 15px solid #4a3b2c; border-radius: 200px;
+        width: 900px; height: 480px;
+        box-shadow: 0 10px 30px rgba(0,0,0,0.8), inset 0 0 20px rgba(0,0,0,0.5);
+        display: flex; justify-content: center; align-items: center;
+        flex-direction: column; flex-shrink: 0; margin-top: 50px;
+    }
+
+    /* GTO panel */
+    #gto-panel {
+        width: 90%; max-width: 300px;
+        background: rgba(30, 30, 30, 0.85);
+        border: 2px solid #555; border-radius: 12px;
+        padding: 15px; text-align: left;
+        box-shadow: 0 8px 20px rgba(0,0,0,0.6); margin-bottom: 20px;
+    }
+    #gto-title {
+        color: #f1c40f; font-weight: bold; font-size: 18px;
+        margin-bottom: 12px; border-bottom: 1px solid #7f8c8d; padding-bottom: 8px;
+    }
+    .gto-item { margin-bottom: 10px; font-size: 14px; color: #ecf0f1; line-height: 1.4; }
+    .gto-value { font-weight: bold; color: #3498db; }
+    .gto-action { font-weight: bold; color: #2ecc71; font-size: 16px; }
+
+    /* Seats */
+    .seat {
+        position: absolute; width: 190px; text-align: center;
+        background: rgba(0,0,0,0.6); border-radius: 10px;
+        padding: 10px; box-shadow: 0 4px 8px rgba(0,0,0,0.5);
+        transition: all 0.3s; border: 2px solid transparent;
+    }
+    .seat.active {
+        box-shadow: 0 0 15px 5px #f1c40f;
+        border: 2px solid #f1c40f;
+        transform: scale(1.05); z-index: 20;
+    }
+    .seat.folded { opacity: 0.5; filter: grayscale(100%); }
+    .seat.winner-anim {
+        border-color: #2ecc71; box-shadow: 0 0 25px #2ecc71;
+        animation: winnerPulse 1s infinite alternate; z-index: 30;
+    }
+    .seat.is-me {
+        background: rgba(30, 60, 90, 0.9);
+        border-color: #3498db;
+    }
+    .seat.is-me.active { border-color: #f1c40f; }
+    .seat.sitting-out { opacity: 0.4; border-style: dashed; }
+    @keyframes winnerPulse {
+        from { transform: scale(1.05); }
+        to { transform: scale(1.1); box-shadow: 0 0 35px #2ecc71; }
+    }
+
+    /* Dynamic seat positions (based on player count + visual idx) */
+    .seat.vpos-0 { bottom: -50px; left: 50%; transform: translateX(-50%); z-index: 10; }
+    .seat.vpos-0.active { transform: translateX(-50%) scale(1.05); }
+
+    .pcount-3 .seat.vpos-1 { top: -60px; left: 20%; transform: translateX(-50%); }
+    .pcount-3 .seat.vpos-1.active { transform: translateX(-50%) scale(1.05); }
+    .pcount-3 .seat.vpos-2 { top: -60px; right: 20%; transform: translateX(50%); }
+    .pcount-3 .seat.vpos-2.active { transform: translateX(50%) scale(1.05); }
+
+    .pcount-4 .seat.vpos-1 { left: -70px; top: 60%; transform: translateY(-50%); }
+    .pcount-4 .seat.vpos-1.active { transform: translateY(-50%) scale(1.05); }
+    .pcount-4 .seat.vpos-2 { top: -60px; left: 50%; transform: translateX(-50%); }
+    .pcount-4 .seat.vpos-2.active { transform: translateX(-50%) scale(1.05); }
+    .pcount-4 .seat.vpos-3 { right: -70px; top: 60%; transform: translateY(-50%); }
+    .pcount-4 .seat.vpos-3.active { transform: translateY(-50%) scale(1.05); }
+
+    .player-info { margin-bottom: 2px; font-weight: bold; font-size: 14px; }
+    .player-info .ai-tag { color: #e67e22; font-size: 11px; margin-left: 4px; }
+    .chips-display { color: #f1c40f; font-size: 18px; font-weight: bold; margin-bottom: 2px; }
+    .profit-display { font-size: 13px; font-weight: bold; margin-bottom: 5px; }
+    .profit-up { color: #2ecc71; } .profit-down { color: #e74c3c; } .profit-even { color: #bdc3c7; }
+    .action-text { color: #34dbae; font-size: 14px; min-height: 20px; font-weight: bold; }
+
+    .badge {
+        display: inline-block; width: 24px; height: 24px;
+        line-height: 24px; border-radius: 50%;
+        font-weight: bold; font-size: 12px; margin: 0 2px;
+        box-shadow: 1px 1px 3px #000;
+    }
+    .badge-d { background: #ecf0f1; color: #2c3e50; }
+    .badge-sb { background: #9b59b6; color: white; }
+    .badge-bb { background: #e67e22; color: white; }
+
+    .cards-container { display: flex; justify-content: center; gap: 5px; margin-top: 5px; }
+    .card {
+        width: 45px; height: 65px; background: white;
+        border-radius: 5px; display: flex; justify-content: center; align-items: center;
+        font-size: 20px; font-weight: bold; color: black;
+        box-shadow: 2px 2px 5px rgba(0,0,0,0.4); border: 1px solid #ccc;
+    }
+    .card.red { color: #e74c3c; }
+    .card.hidden {
+        background: repeating-linear-gradient(45deg, #2980b9, #2980b9 5px, #3498db 5px, #3498db 10px);
+        color: transparent;
+    }
+    .seat.is-me .card { width: 60px; height: 85px; font-size: 26px; }
+
+    .center-area { text-align: center; z-index: 5; }
+    .pot-display {
+        font-size: 28px; color: #f1c40f; font-weight: bold;
+        margin-bottom: 5px; background: rgba(0,0,0,0.5);
+        padding: 5px 20px; border-radius: 20px;
+    }
+    .short-deck-label {
+        font-size: 12px; color: #e74c3c; font-weight: bold;
+        margin-bottom: 5px; text-transform: uppercase; letter-spacing: 1px;
+    }
+    .community-cards {
+        display: flex; gap: 10px; min-height: 90px; justify-content: center;
+    }
+    .community-cards .card { width: 60px; height: 85px; font-size: 26px; }
+
+    #game-msg {
+        position: fixed; left: 50%; top: 20px; transform: translateX(-50%);
+        color: #f1c40f; font-size: 16px; font-weight: bold;
+        background: rgba(0, 0, 0, 0.9); padding: 12px 20px;
+        border-radius: 8px; z-index: 9999;
+        border-bottom: 4px solid #d35400;
+        box-shadow: 0 5px 20px rgba(0,0,0,0.8);
+        text-align: center; width: 85%; max-width: 400px;
+        line-height: 1.4; pointer-events: none; display: none;
+    }
+
+    /* Room code displayed during game */
+    .room-info-bar {
+        max-width: 1250px; margin: 0 auto 10px;
+        display: flex; justify-content: space-between; align-items: center;
+        padding: 0 15px; flex-wrap: wrap; gap: 10px;
+    }
+    .room-info-bar .room-code {
+        font-family: 'Courier New', monospace;
+        font-size: 14px; font-weight: bold; color: #f1c40f;
+        letter-spacing: 0.3em; padding: 6px 12px;
+        background: rgba(0,0,0,0.4); border-radius: 4px;
+        cursor: pointer; border: 1px solid #34495e;
+    }
+    .room-info-bar .room-code.copied { background: #2ecc71; color: white; }
+    .room-info-bar .leave-btn {
+        background: transparent; border: 1px solid #7f8c8d;
+        color: #bdc3c7; padding: 6px 14px;
+        border-radius: 4px; cursor: pointer;
+        font-family: inherit; font-size: 13px; letter-spacing: 0.1em;
+    }
+    .room-info-bar .leave-btn:hover { background: rgba(231,76,60,0.2); border-color: #e74c3c; color: #e74c3c; }
+
+    /* Control panel */
+    .control-panel {
+        background: #2c3e50; padding: 20px; border-radius: 10px;
+        width: 90%; max-width: 800px; margin: 0 auto 20px;
+        box-shadow: 0 5px 15px rgba(0,0,0,0.5);
+        display: flex; flex-direction: column; gap: 15px;
+    }
+    .action-controls {
+        display: flex; flex-direction: column; gap: 15px;
+        transition: opacity 0.3s;
+    }
+    .action-controls.disabled { opacity: 0.4; pointer-events: none; }
+    .slider-container {
+        display: flex; align-items: center; justify-content: center;
+        gap: 10px; flex-wrap: wrap;
+    }
+    input[type=range] { width: 100%; max-width: 300px; cursor: pointer; }
+    .bet-value {
+        font-size: 20px; font-weight: bold; color: #f1c40f;
+        min-width: 100px; text-align: center;
+    }
+    .buttons {
+        display: flex; justify-content: center; gap: 10px; flex-wrap: wrap;
+    }
+    .action-btn {
+        padding: 12px 15px; font-size: 16px; font-weight: bold;
+        cursor: pointer; border: none; border-radius: 5px;
+        transition: 0.2s; flex: 1; min-width: 110px; max-width: 200px;
+        font-family: inherit;
+    }
+    .action-btn:hover:not(:disabled) { transform: translateY(-2px); filter: brightness(1.2); }
+    .action-btn:disabled { background: #7f8c8d; color: #bdc3c7; cursor: not-allowed; }
+    .btn-fold { background: #e74c3c; color: white; }
+    .btn-call { background: #2ecc71; color: white; }
+    .btn-raise { background: #e67e22; color: white; }
+</style>
+</head>
+<body>
+
+<h2>Texas Hold'em · 联机高额局</h2>
+
+<div id="mqtt-status" class="mqtt-status connecting">
+    <span class="dot"></span><span class="label">连接中…</span>
+</div>
+
+<!-- Home Screen -->
+<div id="home-screen" class="screen-card">
+    <h1>德州扑克</h1>
+    <div class="subtitle">SHORT DECK · 联机版</div>
+
+    <label class="field-label">你的昵称</label>
+    <input type="text" id="name-input" maxlength="10" placeholder="输入你的昵称">
+
+    <button class="btn-primary" id="btn-create-room">创建房间</button>
+
+    <div class="or-divider">
+        <div class="hl"></div><span>OR</span><div class="hl"></div>
+    </div>
+
+    <label class="field-label">房间号</label>
+    <input type="text" id="code-input" maxlength="6" placeholder="XXXXXX">
+    <button class="btn-secondary" id="btn-join-room">加入房间</button>
+
+    <div id="home-error" class="error-msg" style="display:none"></div>
+</div>
+
+<!-- Lobby Screen -->
+<div id="lobby-screen" class="screen-card" style="display:none">
+    <h1>房间等待中</h1>
+    <div class="subtitle">Lobby</div>
+
+    <div class="lobby-code" id="lobby-code-display">XXXXXX</div>
+    <div class="lobby-code-hint">👆 点击复制房间号发给同事</div>
+
+    <div style="font-size: 13px; color: #bdc3c7; margin-bottom: 8px; letter-spacing: 0.1em;">已加入玩家</div>
+    <div class="player-list" id="lobby-players"></div>
+
+    <div class="lobby-note" id="lobby-note-2p" style="display:none">
+        💡 当前只有 2 位真人玩家，开始时将自动添加 1 个 AI (Tan Xuan) 凑成 3 人桌
+    </div>
+    <div class="lobby-note" id="lobby-note-wait" style="display:none">
+        ⏳ 等待房主开始游戏…
+    </div>
+    <div class="lobby-note" id="lobby-note-full" style="display:none; background: rgba(231,76,60,0.15); border-left-color: #e74c3c; color: #e74c3c;">
+        ⚠️ 房间已满 (4/4)
+    </div>
+
+    <button class="btn-primary" id="btn-start-game" style="display:none">开始游戏</button>
+    <button class="btn-secondary" id="btn-leave-lobby">离开房间</button>
+
+    <div id="lobby-error" class="error-msg" style="display:none"></div>
+</div>
+
+<!-- Game Screen -->
+<div id="game-screen" style="display:none">
+    <div class="room-info-bar">
+        <span class="room-code" id="game-room-code" title="点击复制">------</span>
+        <button class="leave-btn" id="btn-leave-game">离开游戏</button>
+    </div>
+
+    <div class="game-container">
+        <div class="table-wrapper" id="table-wrapper">
+            <div class="table" id="poker-table">
+                <div class="center-area">
+                    <div class="short-deck-label">Short Deck: 同花 > 葫芦 | A-6-7-8-9 顺子</div>
+                    <div class="pot-display">底池: $<span id="total-pot">0</span></div>
+                    <div class="community-cards" id="community-cards"></div>
+                </div>
+                <!-- Seats will be inserted here by JS -->
+            </div>
+        </div>
+
+        <div id="gto-panel">
+            <div id="gto-title">🤖 GTO 实时辅助</div>
+            <div id="gto-content">
+                <div style="color:#bdc3c7; font-size:14px;">等待行动...</div>
+            </div>
+        </div>
+    </div>
+
+    <div class="control-panel">
+        <div class="action-controls disabled" id="action-controls">
+            <div class="slider-container">
+                <span style="font-weight: bold;">加注至:</span>
+                <input type="range" id="bet-slider" min="2000" max="200000" step="1000" value="2000">
+                <span class="bet-value">$<span id="slider-val">2000</span></span>
+            </div>
+            <div class="buttons">
+                <button class="action-btn btn-fold" id="btn-fold">弃牌 (Fold)</button>
+                <button class="action-btn btn-call" id="btn-call">过牌 / 跟注</button>
+                <button class="action-btn btn-raise" id="btn-raise">确认加注</button>
+            </div>
+        </div>
+    </div>
+</div>
+
+<div id="game-msg">等待游戏开始...</div>
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/mqtt/5.10.1/mqtt.min.js"></script>
+<script>
+'use strict';
+
+// ==========================================================
+// CONSTANTS
+// ==========================================================
+const MQTT_BROKERS = [
+    'wss://broker.emqx.io:8084/mqtt',
+    'wss://broker.hivemq.com:8884/mqtt',
+];
+const TOPIC_PREFIX = 'claude-poker/v2/';
+const CLIENT_ID = 'pkr_' + Math.random().toString(36).slice(2, 10) + '_' + Date.now().toString(36);
+const CODE_CHARS = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
+const MAX_HUMANS = 4;
+const MIN_HUMANS = 2;
+const BLIND_SB = 1000;
+const BLIND_BB = 2000;
+const BUY_IN = 300000;
+const AI_NAME = 'Tan Xuan';
+const AI_CID = 'AI-BOT-01';
+const SUITS = ['♥', '♦', '♣', '♠'];
+const VALUES = ['6', '7', '8', '9', '10', 'J', 'Q', 'K', 'A'];
+
+const JOIN_TIMEOUT = 4000;
+const AI_THINK_MS = 1200;
+const NEXT_HAND_DELAY = 5000;
+
+// ==========================================================
+// STATE
+// ==========================================================
+const state = {
+    screen: 'home',
+    mqttStatus: 'connecting',
+    roomCode: '',
+    myName: '',
+    iAmHost: false,
+    pub: null,        // Latest public state received (or built locally if host)
+    myHand: null,     // {handId, cards}
+    copied: false,
+    error: '',
+    joinTimer: null,
+};
+
+// Host-only internal state (the "truth" of the game)
+let hostGame = null;
+
+// MQTT
+let mqtt_ = null;
+let brokerAttempt = 0;
+let subscribedTopics = new Set();
+let nextVersion = 1;
+let nextMsgId = 1;
+
+// ==========================================================
+// UTILITIES
+// ==========================================================
+function generateCode() {
+    let s = '';
+    for (let i = 0; i < 6; i++) s += CODE_CHARS[Math.floor(Math.random() * CODE_CHARS.length)];
+    return s;
+}
+
+function sanitizeName(n) {
+    return (n || '').trim().slice(0, 10) || 'Player';
+}
+
+function logMsg(msg) {
+    const box = document.getElementById('game-msg');
+    box.innerHTML = msg;
+    box.style.display = 'block';
+}
+
+function hideGameMsg() {
+    document.getElementById('game-msg').style.display = 'none';
+}
+
+// Topics
+function topicState(code) { return TOPIC_PREFIX + code + '/state'; }
+function topicAction(code) { return TOPIC_PREFIX + code + '/action'; }
+function topicHand(code, cid) { return TOPIC_PREFIX + code + '/hand/' + cid; }
+
+// ==========================================================
+// MQTT SETUP
+// ==========================================================
+function updateMqttIndicator() {
+    const el = document.getElementById('mqtt-status');
+    if (!el) return;
+    el.className = 'mqtt-status ' + state.mqttStatus;
+    const labels = { connecting: '连接中…', connected: '已连接', error: '连接失败' };
+    el.querySelector('.label').textContent = labels[state.mqttStatus] || '';
+}
+
+function connectMqtt() {
+    const url = MQTT_BROKERS[brokerAttempt];
+    if (!url) {
+        state.mqttStatus = 'error';
+        updateMqttIndicator();
+        showError('无法连接到任何公共 MQTT 服务器，请检查网络');
+        return;
+    }
+    state.mqttStatus = 'connecting';
+    updateMqttIndicator();
+
+    try {
+        mqtt_ = mqtt.connect(url, {
+            clientId: CLIENT_ID,
+            clean: true,
+            connectTimeout: 5000,
+            reconnectPeriod: 3000,
+            keepalive: 45,
+        });
+    } catch (e) {
+        brokerAttempt++; setTimeout(connectMqtt, 400); return;
+    }
+
+    mqtt_.on('connect', () => {
+        state.mqttStatus = 'connected';
+        updateMqttIndicator();
+        // Resubscribe to any topics we were subscribed to
+        for (const t of subscribedTopics) mqtt_.subscribe(t, { qos: 1 });
+    });
+
+    mqtt_.on('reconnect', () => {
+        state.mqttStatus = 'connecting'; updateMqttIndicator();
+    });
+
+    mqtt_.on('error', (err) => {
+        console.warn('MQTT error:', err && err.message);
+        if (state.mqttStatus === 'connecting' && brokerAttempt < MQTT_BROKERS.length - 1) {
+            try { mqtt_.end(true); } catch (e) {}
+            brokerAttempt++; setTimeout(connectMqtt, 300);
+        }
+    });
+
+    mqtt_.on('close', () => {
+        if (state.mqttStatus === 'connected') { state.mqttStatus = 'connecting'; updateMqttIndicator(); }
+    });
+
+    mqtt_.on('message', handleMqttMessage);
+}
+
+function subscribe(topic) {
+    subscribedTopics.add(topic);
+    if (mqtt_ && mqtt_.connected) mqtt_.subscribe(topic, { qos: 1 });
+}
+
+function unsubscribe(topic) {
+    subscribedTopics.delete(topic);
+    if (mqtt_ && mqtt_.connected) mqtt_.unsubscribe(topic);
+}
+
+function publish(topic, payload, opts = {}) {
+    if (!mqtt_ || !mqtt_.connected) return false;
+    try {
+        mqtt_.publish(topic, JSON.stringify(payload), { qos: 1, retain: !!opts.retain });
+        return true;
+    } catch (e) { console.warn('publish fail:', e); return false; }
+}
+
+function handleMqttMessage(topic, payload) {
+    let msg;
+    try { msg = JSON.parse(payload.toString()); } catch (e) { return; }
+
+    // State topic
+    if (topic === topicState(state.roomCode)) {
+        handleStateUpdate(msg);
+        return;
+    }
+    // Action topic (host only)
+    if (topic === topicAction(state.roomCode) && state.iAmHost) {
+        handleActionMessage(msg);
+        return;
+    }
+    // My own hand topic
+    if (topic === topicHand(state.roomCode, CLIENT_ID)) {
+        handleHandUpdate(msg);
+        return;
+    }
+}
+
+// ==========================================================
+// STATE UPDATE HANDLERS (non-host client)
+// ==========================================================
+function handleStateUpdate(msg) {
+    if (state.iAmHost) return; // Host ignores its own broadcasts
+    if (!msg || typeof msg.v !== 'number') return;
+    if (state.pub && msg.v <= state.pub.v) return; // stale
+    state.pub = msg;
+
+    // If we were joining, we should now see ourselves in players
+    if (state.screen === 'joining') {
+        if (state.joinTimer) { clearTimeout(state.joinTimer); state.joinTimer = null; }
+        // Check room state
+        if (msg.phase === 'playing') {
+            showError('该房间已在进行牌局，无法加入');
+            leaveRoomClient();
+            return;
+        }
+        // Check if we're already in players
+        const inList = msg.players.some(p => p && p.cid === CLIENT_ID);
+        if (!inList) {
+            // Send join request
+            publish(topicAction(state.roomCode), {
+                type: 'join', cid: CLIENT_ID, name: state.myName,
+            });
+            // The state will update again when host processes our join
+            return;
+        }
+        // We're in - go to lobby
+        state.screen = 'lobby';
+        render();
+        return;
+    }
+
+    render();
+}
+
+function handleHandUpdate(msg) {
+    if (!msg || !msg.cards) return;
+    state.myHand = msg;
+    render();
+}
+
+// ==========================================================
+// HOST: Action handler
+// ==========================================================
+function handleActionMessage(msg) {
+    if (!msg || !msg.type || !msg.cid) return;
+
+    if (msg.type === 'join') {
+        hostOnJoinRequest(msg.cid, sanitizeName(msg.name));
+    } else if (msg.type === 'leave') {
+        hostOnLeaveRequest(msg.cid);
+    } else if (msg.type === 'action') {
+        hostOnPlayerAction(msg.cid, msg);
+    }
+}
+
+// ==========================================================
+// HOST: Create / Join / Leave / Lobby
+// ==========================================================
+function hostCreateRoom(myName) {
+    state.roomCode = generateCode();
+    state.myName = myName;
+    state.iAmHost = true;
+    state.screen = 'lobby';
+
+    hostGame = {
+        phase: 'lobby',
+        players: [
+            makePlayerObj(CLIENT_ID, myName, false),
+        ],
+        deck: [],
+        communityCards: [],
+        pot: 0,
+        highestBet: 0,
+        stage: -1,
+        dealerIdx: 0,
+        currentIdx: 0,
+        handId: 0,
+        msg: '等待玩家加入…',
+        msgIdCounter: 0,
+        msgId: 0,
+        showAllCards: false,
+    };
+
+    // Subscribe to action (for handling joins etc) and our own hand topic
+    subscribe(topicAction(state.roomCode));
+    subscribe(topicHand(state.roomCode, CLIENT_ID));
+
+    // Publish initial retained state
+    hostPublishState();
+    render();
+}
+
+function joinRoomFlow(code, myName) {
+    code = code.toUpperCase().trim();
+    if (!/^[A-Z0-9]{6}$/.test(code)) {
+        showError('房间号应为 6 位字母数字');
+        return;
+    }
+    state.roomCode = code;
+    state.myName = myName;
+    state.iAmHost = false;
+    state.screen = 'joining';
+    state.pub = null;
+
+    subscribe(topicState(code));
+    subscribe(topicHand(code, CLIENT_ID));
+
+    state.joinTimer = setTimeout(() => {
+        if (state.screen === 'joining') {
+            showError('房间不存在或已过期');
+            leaveRoomClient();
+        }
+    }, JOIN_TIMEOUT);
+
+    render();
+}
+
+function leaveRoomClient() {
+    if (state.joinTimer) { clearTimeout(state.joinTimer); state.joinTimer = null; }
+    // Send leave notification if connected to a room
+    if (state.roomCode && !state.iAmHost) {
+        publish(topicAction(state.roomCode), { type: 'leave', cid: CLIENT_ID });
+    }
+    // Unsubscribe from everything for this room
+    for (const t of Array.from(subscribedTopics)) {
+        if (t.startsWith(TOPIC_PREFIX + state.roomCode + '/')) unsubscribe(t);
+    }
+    // If host is leaving, wipe retained state
+    if (state.iAmHost && state.roomCode) {
+        publish(topicState(state.roomCode), { v: 999999, phase: 'ended', players: [] }, { retain: true });
+    }
+    // Reset
+    state.screen = 'home';
+    state.roomCode = '';
+    state.iAmHost = false;
+    state.pub = null;
+    state.myHand = null;
+    state.error = '';
+    hostGame = null;
+    render();
+}
+
+function hostOnJoinRequest(cid, name) {
+    if (!hostGame) return;
+    if (hostGame.phase !== 'lobby') return; // No joining mid-game
+    if (hostGame.players.some(p => p && p.cid === cid)) {
+        hostPublishState();
+        return;
+    }
+    const humanCount = hostGame.players.filter(p => !p.isAI).length;
+    if (humanCount >= MAX_HUMANS) return; // full
+
+    hostGame.players.push(makePlayerObj(cid, name, false));
+    hostLog(`${name} 加入了房间`);
+    hostPublishState();
+}
+
+function hostOnLeaveRequest(cid) {
+    if (!hostGame) return;
+    const idx = hostGame.players.findIndex(p => p.cid === cid);
+    if (idx < 0) return;
+
+    if (hostGame.phase === 'lobby') {
+        const name = hostGame.players[idx].name;
+        hostGame.players.splice(idx, 1);
+        hostLog(`${name} 离开了房间`);
+        hostPublishState();
+    } else {
+        // Mid-game: mark as folded and sitting out
+        hostGame.players[idx].folded = true;
+        hostGame.players[idx].sittingOut = true;
+        hostGame.players[idx].acted = true;
+        hostLog(`${hostGame.players[idx].name} 掉线，自动弃牌`);
+        if (state.iAmHost) {
+            // If it was their turn, continue
+            if (hostGame.currentIdx === idx) {
+                hostGame.players[idx].actionStr = '弃牌 (掉线)';
+                hostMoveToNext();
+                setTimeout(hostProcessTurn, 100);
+            }
+            hostPublishState();
+        }
+    }
+}
+
+function makePlayerObj(cid, name, isAI) {
+    return {
+        cid, name, isAI,
+        chips: BUY_IN, totalBuyIn: BUY_IN,
+        hand: [], currentBet: 0, totalContribution: 0,
+        folded: false, acted: false, isAllIn: false,
+        isWinner: false, actionStr: '',
+        finalScore: 0, handName: '',
+        sittingOut: false,
+    };
+}
+
+// ==========================================================
+// HOST: Start game
+// ==========================================================
+function hostStartGame() {
+    if (!hostGame) return;
+    const humans = hostGame.players.filter(p => !p.isAI);
+    if (humans.length < MIN_HUMANS) {
+        hostLog('至少需要 2 位真人玩家才能开始');
+        hostPublishState();
+        return;
+    }
+    if (humans.length === 2) {
+        // Add AI at a random position
+        const insertAt = Math.random() < 0.5 ? 1 : 2;
+        hostGame.players.splice(insertAt, 0, makePlayerObj(AI_CID, AI_NAME, true));
+    }
+    hostGame.phase = 'playing';
+    hostGame.dealerIdx = 0;
+    hostStartHand();
+}
+
+function hostStartHand() {
+    if (!hostGame || hostGame.phase !== 'playing') return;
+
+    hostGame.handId++;
+    hostGame.deck = buildDeck();
+    hostGame.communityCards = [];
+    hostGame.pot = 0;
+    hostGame.highestBet = BLIND_BB;
+    hostGame.stage = 0;
+    hostGame.showAllCards = false;
+
+    hostGame.players.forEach(p => {
+        if (p.chips <= 0 && !p.sittingOut) {
+            p.chips = BUY_IN; p.totalBuyIn += BUY_IN;
+        }
+        p.hand = p.sittingOut ? [] : [hostGame.deck.pop(), hostGame.deck.pop()];
+        p.currentBet = 0; p.totalContribution = 0;
+        p.folded = !!p.sittingOut;
+        p.acted = !!p.sittingOut;
+        p.isAllIn = false; p.isWinner = false;
+        p.actionStr = p.sittingOut ? '离席' : '';
+        p.finalScore = 0; p.handName = '';
+    });
+
+    // Post blinds
+    const numP = hostGame.players.length;
+    const sbIdx = findNextActive(hostGame.dealerIdx);
+    const bbIdx = findNextActive(sbIdx);
+    hostForceBet(sbIdx, BLIND_SB);
+    hostGame.players[sbIdx].actionStr = `SB ($${BLIND_SB})`;
+    hostForceBet(bbIdx, BLIND_BB);
+    hostGame.players[bbIdx].actionStr = `BB ($${BLIND_BB})`;
+
+    hostGame.currentIdx = findNextActive(bbIdx);
+    hostLog(`翻牌前 (Pre-Flop) — 第 ${hostGame.handId} 手`);
+
+    // Send hands to humans
+    hostGame.players.forEach(p => {
+        if (!p.isAI && !p.sittingOut) {
+            publish(topicHand(state.roomCode, p.cid),
+                { handId: hostGame.handId, cards: p.hand },
+                { retain: true });
+        }
+    });
+
+    // If host has hand, set local
+    const myself = hostGame.players.find(p => p.cid === CLIENT_ID);
+    if (myself) state.myHand = { handId: hostGame.handId, cards: myself.hand };
+
+    hostPublishState();
+    setTimeout(hostProcessTurn, 800);
+}
+
+function findNextActive(fromIdx) {
+    const n = hostGame.players.length;
+    for (let i = 1; i <= n; i++) {
+        const idx = (fromIdx + i) % n;
+        if (!hostGame.players[idx].sittingOut) return idx;
+    }
+    return fromIdx;
+}
+
+function hostForceBet(pIdx, amount) {
+    const p = hostGame.players[pIdx];
+    const actual = Math.min(amount, p.chips);
+    p.chips -= actual;
+    p.currentBet += actual;
+    p.totalContribution += actual;
+    hostGame.pot += actual;
+    if (p.chips === 0) p.isAllIn = true;
+}
+
+// ==========================================================
+// HOST: Turn processing
+// ==========================================================
+function hostIsRoundOver() {
+    const activePlayers = hostGame.players.filter(p => !p.folded && !p.isAllIn);
+    if (activePlayers.length === 0) return true;
+    if (activePlayers.length === 1) {
+        return activePlayers.filter(p => !p.acted || p.currentBet < hostGame.highestBet).length === 0;
+    }
+    return activePlayers.every(p => p.acted && p.currentBet === hostGame.highestBet);
+}
+
+function hostCheckEarlyWin() {
+    const alive = hostGame.players.filter(p => !p.folded);
+    if (alive.length === 1) {
+        alive[0].chips += hostGame.pot;
+        hostGame.pot = 0;
+        alive[0].isWinner = true;
+        hostLog(`${alive[0].name} 赢得底池 <br><span style="font-size:13px;color:#bdc3c7;">(其他人已弃牌)</span>`);
+        hostEndHand(false);
+        return true;
+    }
+    return false;
+}
+
+function hostProcessTurn() {
+    if (!hostGame || hostGame.phase !== 'playing') return;
+    if (hostCheckEarlyWin()) return;
+    if (hostIsRoundOver()) { hostAdvanceStage(); return; }
+
+    const p = hostGame.players[hostGame.currentIdx];
+    if (p.folded || p.isAllIn || p.sittingOut) {
+        hostMoveToNext(); setTimeout(hostProcessTurn, 0); return;
+    }
+
+    hostPublishState();
+
+    if (p.isAI) {
+        setTimeout(() => hostExecuteAI(p), AI_THINK_MS);
+    }
+    // For human, we just wait for action message
+}
+
+function hostMoveToNext() {
+    hostGame.currentIdx = (hostGame.currentIdx + 1) % hostGame.players.length;
+}
+
+function hostAdvanceStage() {
+    hostGame.stage++;
+    hostGame.players.forEach(p => {
+        p.currentBet = 0;
+        p.acted = false;
+        if (!p.folded && !p.isAllIn) p.actionStr = '';
+    });
+    hostGame.highestBet = 0;
+    hostGame.currentIdx = findNextActive(hostGame.dealerIdx);
+
+    if (hostGame.stage === 1) {
+        hostGame.communityCards.push(hostGame.deck.pop(), hostGame.deck.pop(), hostGame.deck.pop());
+        hostLog('翻牌圈 (Flop) !');
+    } else if (hostGame.stage === 2) {
+        hostGame.communityCards.push(hostGame.deck.pop());
+        hostLog('转牌圈 (Turn) !');
+    } else if (hostGame.stage === 3) {
+        hostGame.communityCards.push(hostGame.deck.pop());
+        hostLog('河牌圈 (River) !');
+    } else if (hostGame.stage === 4) {
+        hostShowdown(); return;
+    }
+    hostPublishState();
+    setTimeout(hostProcessTurn, 800);
+}
+
+function hostApplyAction(p, actionType, amount) {
+    p.acted = true;
+    let actionStr = '';
+
+    if (actionType === 'fold') {
+        p.folded = true; actionStr = '弃牌 (Fold)';
+    } else if (actionType === 'call') {
+        const actualCall = Math.min(hostGame.highestBet - p.currentBet, p.chips);
+        p.chips -= actualCall;
+        p.currentBet += actualCall;
+        p.totalContribution += actualCall;
+        hostGame.pot += actualCall;
+        if (p.chips === 0) p.isAllIn = true;
+        actionStr = actualCall === 0 ? '过牌 (Check)' : (p.isAllIn ? 'ALL-IN' : `跟注 ($${actualCall})`);
+    } else if (actionType === 'raise') {
+        const totalTarget = hostGame.highestBet + amount;
+        const actualRaise = Math.min(totalTarget - p.currentBet, p.chips);
+        p.chips -= actualRaise;
+        p.currentBet += actualRaise;
+        p.totalContribution += actualRaise;
+        hostGame.pot += actualRaise;
+        hostGame.highestBet = p.currentBet;
+        if (p.chips === 0) p.isAllIn = true;
+        actionStr = p.isAllIn ? 'ALL-IN' : `加注至 $${hostGame.highestBet}`;
+        hostGame.players.forEach(op => {
+            if (op.cid !== p.cid && !op.folded && !op.isAllIn) op.acted = false;
+        });
+    }
+    p.actionStr = actionStr;
+    hostMoveToNext();
+    hostProcessTurn();
+}
+
+// ==========================================================
+// HOST: Player action from network
+// ==========================================================
+function hostOnPlayerAction(cid, msg) {
+    if (!hostGame || hostGame.phase !== 'playing') return;
+    const p = hostGame.players[hostGame.currentIdx];
+    if (!p || p.cid !== cid) return; // Not their turn
+    if (p.folded || p.isAllIn) return;
+    if (msg.handId !== hostGame.handId) return; // stale
+
+    const action = msg.action;
+    if (!['fold', 'call', 'raise'].includes(action)) return;
+
+    let amount = Math.max(0, parseInt(msg.amount || 0));
+    // Basic validation for raise amount
+    if (action === 'raise') {
+        const minRaiseTo = hostGame.highestBet === 0 ? BLIND_BB : hostGame.highestBet * 2;
+        const targetTotal = hostGame.highestBet + amount;
+        if (targetTotal < minRaiseTo) amount = Math.max(minRaiseTo - hostGame.highestBet, 0);
+        // Cap at all-in
+        const maxTotal = p.chips + p.currentBet;
+        if (targetTotal > maxTotal) amount = maxTotal - hostGame.highestBet;
+    }
+    hostApplyAction(p, action, amount);
+}
+
+// ==========================================================
+// HOST: Showdown
+// ==========================================================
+function hostShowdown() {
+    const active = hostGame.players.filter(p => p.totalContribution > 0).slice();
+    active.sort((a, b) => a.totalContribution - b.totalContribution);
+
+    const pots = [];
+    let level = 0;
+    active.forEach((p, i) => {
+        const diff = p.totalContribution - level;
+        if (diff > 0) {
+            let potSize = 0;
+            const eligible = [];
+            for (let j = i; j < active.length; j++) {
+                potSize += diff;
+                if (!active[j].folded) eligible.push(active[j]);
+            }
+            pots.push({ amount: potSize, eligible });
+            level += diff;
+        }
+    });
+
+    pots.forEach(po => {
+        if (po.amount === 0 || po.eligible.length === 0) return;
+        let best = -1;
+        po.eligible.forEach(p => {
+            const res = evaluate7Cards([...p.hand, ...hostGame.communityCards]);
+            p.finalScore = res.score;
+            p.handName = res.name;
+            p.actionStr = res.name;
+            if (res.score > best) best = res.score;
+        });
+        const winners = po.eligible.filter(p => p.finalScore === best);
+        const split = Math.floor(po.amount / winners.length);
+        winners.forEach(w => { w.chips += split; w.isWinner = true; });
+    });
+
+    const winNames = hostGame.players.filter(p => p.isWinner).map(p => p.name);
+    hostLog(`🏆 摊牌！获胜者: ${winNames.join(', ')}`);
+    hostGame.pot = 0;
+    hostGame.showAllCards = true;
+    hostEndHand(true);
+}
+
+function hostEndHand(isShowdown) {
+    hostGame.stage = 4;
+    hostPublishState();
+    // Schedule next hand
+    setTimeout(() => {
+        if (!hostGame || hostGame.phase !== 'playing') return;
+        // Check if any humans left
+        const realHumans = hostGame.players.filter(p => !p.isAI && !p.sittingOut);
+        if (realHumans.length < 1) {
+            hostGame.phase = 'ended';
+            hostLog('房间结束');
+            hostPublishState();
+            return;
+        }
+        // Advance dealer button
+        hostGame.dealerIdx = findNextActive(hostGame.dealerIdx);
+        hostStartHand();
+    }, NEXT_HAND_DELAY);
+}
+
+// ==========================================================
+// HOST: Logging + Publishing
+// ==========================================================
+function hostLog(msg) {
+    hostGame.msg = msg;
+    hostGame.msgIdCounter = (hostGame.msgIdCounter || 0) + 1;
+    hostGame.msgId = hostGame.msgIdCounter;
+}
+
+function hostPublishState() {
+    if (!hostGame) return;
+    const pub = {
+        v: nextVersion++,
+        phase: hostGame.phase,
+        hostId: CLIENT_ID,
+        players: hostGame.players.map(p => ({
+            cid: p.cid, name: p.name, isAI: p.isAI,
+            chips: p.chips, buyIn: p.totalBuyIn,
+            curBet: p.currentBet, totalC: p.totalContribution,
+            folded: p.folded, acted: p.acted, allIn: p.isAllIn,
+            winner: p.isWinner, actStr: p.actionStr,
+            handName: p.handName, sittingOut: p.sittingOut,
+            hand: (hostGame.showAllCards && !p.folded) ? p.hand : null,
+        })),
+        community: hostGame.communityCards,
+        pot: hostGame.pot,
+        maxBet: hostGame.highestBet,
+        stage: hostGame.stage,
+        dealer: hostGame.dealerIdx,
+        current: hostGame.currentIdx,
+        handId: hostGame.handId,
+        msg: hostGame.msg,
+        msgId: hostGame.msgId,
+        showAll: hostGame.showAllCards,
+    };
+    state.pub = pub; // Also update host's local view
+    publish(topicState(state.roomCode), pub, { retain: true });
+    render();
+}
+
+// ==========================================================
+// HOST: AI (adapted from original)
+// ==========================================================
+function hostExecuteAI(p) {
+    if (!hostGame || hostGame.phase !== 'playing') return;
+    if (hostGame.players[hostGame.currentIdx].cid !== p.cid) return;
+
+    const amountToCall = hostGame.highestBet - p.currentBet;
+    const betRatio = hostGame.pot > 0 ? amountToCall / hostGame.pot : 0;
+    const potOdds = (hostGame.pot + amountToCall) > 0 ? amountToCall / (hostGame.pot + amountToCall) : 0;
+    const handStrength = evaluateBotStrength(p.hand, hostGame.communityCards);
+    const rand = Math.random();
+
+    let action = 'fold';
+    let targetRaiseTo = 0;
+
+    // Strong draw detection
+    let isStrongDraw = false;
+    if (hostGame.stage === 1 || hostGame.stage === 2) {
+        const all = [...p.hand, ...hostGame.communityCards];
+        const sc = {};
+        all.forEach(c => sc[c.suit] = (sc[c.suit] || 0) + 1);
+        if (Math.max(...Object.values(sc)) === 4) isStrongDraw = true;
+
+        let uw = [...new Set(all.map(c => c.weight))].sort((a, b) => a - b);
+        if (uw.includes(14)) uw.push(5);
+        uw.sort((a, b) => a - b);
+        let maxSeq = 1, cur = 1;
+        for (let i = 0; i < uw.length - 1; i++) {
+            if (uw[i + 1] - uw[i] === 1) { cur++; maxSeq = Math.max(maxSeq, cur); }
+            else if (uw[i + 1] - uw[i] !== 0) cur = 1;
+        }
+        if (maxSeq === 4) isStrongDraw = true;
+    }
+
+    // River: fold to big bets with weak hands
+    if (hostGame.stage === 3 && amountToCall > 0) {
+        const aiRank = evaluate7Cards([...p.hand, ...hostGame.communityCards]).rank;
+        if (aiRank <= 2 && betRatio >= 0.33) {
+            const foldProb = betRatio >= 0.45 ? 0.98 : 0.85;
+            if (rand < foldProb) {
+                hostLog(`😨 ${p.name} 面对巨大下注压力，选择弃牌`);
+                hostApplyAction(p, 'fold', 0);
+                return;
+            }
+        }
+    }
+
+    if (hostGame.stage === 0) {
+        const isUnopened = hostGame.highestBet <= BLIND_BB;
+        const w1 = p.hand[0].weight, w2 = p.hand[1].weight;
+        const isSuited = p.hand[0].suit === p.hand[1].suit;
+        const isMonster = (w1 === 14 && w2 === 14) || (w1 === 13 && w2 === 13) ||
+            ((w1 === 12 && w2 === 11 || w1 === 11 && w2 === 12) && isSuited);
+
+        if (isMonster) {
+            action = 'raise';
+            targetRaiseTo = isUnopened ? BLIND_BB * (3 + Math.random() * 2) : hostGame.highestBet * (2.5 + Math.random() * 1.5);
+            hostLog(`🔥 ${p.name} 拿到大牌，强势加注！`);
+        } else if (isUnopened) {
+            if (handStrength > 0.65) { action = rand < 0.85 ? 'raise' : 'call'; targetRaiseTo = BLIND_BB * (2 + Math.random() * 2); }
+            else if (handStrength > 0.45) { action = rand < 0.4 ? 'raise' : 'call'; targetRaiseTo = BLIND_BB * 2; }
+            else { action = amountToCall === 0 ? 'call' : 'fold'; }
+        } else {
+            if (handStrength > 0.8) {
+                if (rand < 0.4) { action = 'raise'; targetRaiseTo = hostGame.highestBet * (2 + Math.random() * 2); }
+                else { action = 'call'; }
+            } else if (handStrength > 0.5) {
+                action = rand < 0.8 ? 'call' : 'fold';
+            } else {
+                if (rand < 0.15) { action = 'raise'; targetRaiseTo = hostGame.highestBet * (2.5 + Math.random() * 1.5); hostLog(`😈 ${p.name} 进行 3-Bet 诈唬！`); }
+                else action = 'fold';
+            }
+        }
+    } else if (hostGame.stage === 3 && evaluate7Cards([...p.hand, ...hostGame.communityCards]).rank <= 2) {
+        const bluffRaise = 0.25, bluffBet = 0.45;
+        if (amountToCall > 0) {
+            if (rand < bluffRaise) { action = 'raise'; targetRaiseTo = hostGame.highestBet + Math.floor(hostGame.pot * (0.5 + Math.random() * 0.5)); hostLog(`💥 ${p.name} 河牌诈唬！`); }
+            else action = 'fold';
+        } else {
+            if (rand < bluffBet) { action = 'raise'; targetRaiseTo = hostGame.highestBet + Math.floor(hostGame.pot * (0.33 + Math.random() * 0.3)); }
+            else action = 'call';
+        }
+    } else {
+        const cannotFold = (handStrength >= 0.6) || (handStrength >= 0.5 && betRatio <= 0.6);
+        const stdBet = Math.floor(hostGame.pot * (0.33 + Math.random() * 0.17));
+
+        if (amountToCall === 0) {
+            if (isStrongDraw && rand < 0.75) {
+                action = 'raise'; targetRaiseTo = hostGame.highestBet + stdBet;
+                hostLog(`🎯 ${p.name} 用听牌进行半诈唬`);
+            } else if (handStrength > 0.65 && rand < 0.85) {
+                action = 'raise'; targetRaiseTo = hostGame.highestBet + stdBet;
+            } else if (handStrength > 0.45 && rand < 0.3) {
+                action = 'raise'; targetRaiseTo = hostGame.highestBet + stdBet;
+            } else action = 'call';
+        } else {
+            // Aggressive AI (Tan Xuan style)
+            if (handStrength > 0.65) { action = 'raise'; targetRaiseTo = hostGame.highestBet + stdBet; }
+            else if (handStrength > 0.45 || isStrongDraw) { action = 'call'; }
+            else {
+                if (betRatio > 1.0) action = rand < 0.2 ? 'raise' : 'fold';
+                else action = rand < 0.3 ? 'call' : 'fold';
+                targetRaiseTo = hostGame.highestBet + stdBet;
+            }
+            if (action === 'fold' && cannotFold) {
+                action = (betRatio > 1.5 && handStrength < 0.75) ? 'fold' : 'call';
+            }
+        }
+    }
+
+    if (action === 'raise') {
+        targetRaiseTo = Math.round(targetRaiseTo / 1000) * 1000;
+        const minRaiseTo = hostGame.highestBet === 0 ? BLIND_BB : hostGame.highestBet * 2;
+        if (targetRaiseTo < minRaiseTo) targetRaiseTo = minRaiseTo;
+        if (targetRaiseTo >= p.chips + p.currentBet) targetRaiseTo = p.chips + p.currentBet;
+        if (p.chips <= amountToCall) action = 'call';
+    }
+    if (action === 'fold' && amountToCall === 0) action = 'call';
+
+    const addOn = action === 'raise' ? (targetRaiseTo - hostGame.highestBet) : 0;
+    hostApplyAction(p, action, addOn);
+}
+
+// ==========================================================
+// GAME RULES (from original)
+// ==========================================================
+function buildDeck() {
+    const d = [];
+    for (const s of SUITS) {
+        for (let i = 0; i < VALUES.length; i++) {
+            d.push({ suit: s, value: VALUES[i], weight: i + 6 });
+        }
+    }
+    for (let i = d.length - 1; i > 0; i--) {
+        const j = Math.floor(Math.random() * (i + 1));
+        [d[i], d[j]] = [d[j], d[i]];
+    }
+    return d;
+}
+
+function evaluate7Cards(cards) {
+    const sorted = cards.slice().sort((a, b) => b.weight - a.weight);
+    const weights = sorted.map(c => c.weight);
+    const suitCount = {};
+    cards.forEach(c => suitCount[c.suit] = (suitCount[c.suit] || 0) + 1);
+    const isFlush = Object.values(suitCount).some(v => v >= 5);
+
+    const weightCount = {};
+    weights.forEach(w => weightCount[w] = (weightCount[w] || 0) + 1);
+    const counts = Object.entries(weightCount).sort((a, b) => b[1] - a[1] || b[0] - a[0]);
+
+    const uniqueW = [...new Set(weights)];
+    let isStraight = false, straightHigh = 0;
+    for (let i = 0; i <= uniqueW.length - 5; i++) {
+        if (uniqueW[i] - uniqueW[i + 4] === 4) { isStraight = true; straightHigh = uniqueW[i]; break; }
+    }
+    if (!isStraight && uniqueW.includes(14) && uniqueW.includes(9) && uniqueW.includes(8) && uniqueW.includes(7) && uniqueW.includes(6)) {
+        isStraight = true; straightHigh = 9;
+    }
+
+    let rank = 0, name = '高牌';
+    if (isStraight && isFlush) { rank = 8; name = '同花顺'; }
+    else if (counts[0][1] === 4) { rank = 7; name = '四条'; }
+    else if (isFlush) { rank = 6; name = '同花'; }
+    else if (counts[0][1] === 3 && counts[1] && counts[1][1] >= 2) { rank = 5; name = '葫芦'; }
+    else if (isStraight) { rank = 4; name = '顺子'; }
+    else if (counts[0][1] === 3) { rank = 3; name = '三条'; }
+    else if (counts[0][1] === 2 && counts[1] && counts[1][1] === 2) { rank = 2; name = '两对'; }
+    else if (counts[0][1] === 2) { rank = 1; name = '一对'; }
+
+    const pw = parseInt(counts[0][0]);
+    const sw = counts[1] ? parseInt(counts[1][0]) : 0;
+    const score = rank * 1e10 + pw * 1e8 + sw * 1e6;
+    return { rank, name, score };
+}
+
+function evaluateBotStrength(hand, comm) {
+    if (!hand || hand.length < 2) return 0;
+    if (!comm || comm.length === 0) {
+        const w1 = hand[0].weight, w2 = hand[1].weight;
+        let score = ((w1 + w2) - 12) / 16;
+        if (w1 === w2) score += 0.3;
+        const diff = Math.abs(w1 - w2);
+        if ((diff === 1 || diff === 2) && w1 >= 10 && w2 >= 10) score += 0.2;
+        return Math.min(score, 1.0);
+    }
+
+    const all = [...hand, ...comm];
+    const ev = evaluate7Cards(all);
+    let base = 0.1;
+    if (ev.rank >= 5) base = 0.95;
+    else if (ev.rank === 4) base = 0.85;
+    else if (ev.rank === 3) base = 0.75;
+    else if (ev.rank === 2) base = 0.65;
+    else if (ev.rank === 1) {
+        const w1 = hand[0].weight, w2 = hand[1].weight;
+        const isTopPair = comm.some(c => c.weight === w1 || c.weight === w2) &&
+            (Math.max(w1, w2) >= Math.max(...comm.map(c => c.weight)));
+        const isOverPair = (w1 === w2) && w1 > Math.max(...comm.map(c => c.weight));
+        base = (isTopPair || isOverPair) ? 0.55 : 0.4;
+    }
+
+    if (comm.length < 5) {
+        const sc = {};
+        all.forEach(c => sc[c.suit] = (sc[c.suit] || 0) + 1);
+        if (Math.max(...Object.values(sc)) === 4) base += 0.25;
+        let mw = [...new Set(all.map(c => c.weight))];
+        if (mw.includes(14)) mw.push(5);
+        mw.sort((a, b) => a - b);
+        let maxSeq = 1, cur = 1;
+        for (let i = 0; i < mw.length - 1; i++) {
+            if (mw[i + 1] - mw[i] === 1) cur++;
+            else cur = 1;
+            maxSeq = Math.max(maxSeq, cur);
+        }
+        if (maxSeq >= 4) base += 0.2;
+    }
+    return Math.min(base, 1.0);
+}
+
+// ==========================================================
+// CLIENT: Send action to host
+// ==========================================================
+function sendAction(actionType) {
+    if (!state.pub) return;
+    const myIdx = state.pub.players.findIndex(p => p && p.cid === CLIENT_ID);
+    if (myIdx < 0 || state.pub.current !== myIdx) return;
+
+    const slider = document.getElementById('bet-slider');
+    const targetAmount = parseInt(slider.value);
+    const addOn = actionType === 'raise' ? (targetAmount - state.pub.maxBet) : 0;
+
+    // Disable UI optimistically
+    disableActionControls();
+
+    const payload = {
+        type: 'action', cid: CLIENT_ID, handId: state.pub.handId,
+        action: actionType, amount: addOn,
+    };
+
+    if (state.iAmHost) {
+        hostOnPlayerAction(CLIENT_ID, payload);
+    } else {
+        publish(topicAction(state.roomCode), payload);
+    }
+}
+
+// ==========================================================
+// UI RENDERING
+// ==========================================================
+function render() {
+    // Show/hide screens
+    document.getElementById('home-screen').style.display = state.screen === 'home' ? 'block' : 'none';
+    document.getElementById('lobby-screen').style.display =
+        (state.screen === 'lobby' || state.screen === 'joining') ? 'block' : 'none';
+    document.getElementById('game-screen').style.display =
+        (state.pub && state.pub.phase === 'playing') ? 'block' : 'none';
+
+    if (state.pub && state.pub.phase === 'playing' && state.screen !== 'game') {
+        state.screen = 'game';
+    }
+
+    if (state.screen === 'home') renderHome();
+    else if (state.screen === 'lobby' || state.screen === 'joining') renderLobby();
+    if (state.pub && state.pub.phase === 'playing') renderGame();
+}
+
+function renderHome() {
+    if (state.error) {
+        const e = document.getElementById('home-error');
+        e.textContent = state.error;
+        e.style.display = 'block';
+    } else {
+        document.getElementById('home-error').style.display = 'none';
+    }
+}
+
+function renderLobby() {
+    // Code
+    document.getElementById('lobby-code-display').textContent = state.roomCode || '------';
+
+    // Player list
+    const listEl = document.getElementById('lobby-players');
+    if (state.screen === 'joining') {
+        listEl.innerHTML = '<div class="empty">正在加入房间…</div>';
+    } else if (state.pub && state.pub.players) {
+        const humans = state.pub.players.filter(p => !p.isAI);
+        if (humans.length === 0) {
+            listEl.innerHTML = '<div class="empty">还没有玩家</div>';
+        } else {
+            listEl.innerHTML = humans.map(p => {
+                const isMe = p.cid === CLIENT_ID;
+                const isHost = p.cid === state.pub.hostId;
+                return `<div class="player-row ${isMe ? 'is-me' : ''}">
+                    <span class="name">${escapeHtml(p.name)} ${isMe ? '(你)' : ''}</span>
+                    ${isHost ? '<span class="host-tag">👑 房主</span>' : ''}
+                </div>`;
+            }).join('');
+        }
+    } else {
+        listEl.innerHTML = '<div class="empty">加载中…</div>';
+    }
+
+    // Notes + Start button
+    const humans = state.pub ? state.pub.players.filter(p => !p.isAI) : [];
+    document.getElementById('lobby-note-2p').style.display =
+        (state.iAmHost && humans.length === 2) ? 'block' : 'none';
+    document.getElementById('lobby-note-wait').style.display =
+        (!state.iAmHost && humans.length >= 2) ? 'block' : 'none';
+    document.getElementById('lobby-note-full').style.display =
+        (humans.length >= MAX_HUMANS) ? 'block' : 'none';
+
+    const startBtn = document.getElementById('btn-start-game');
+    if (state.iAmHost && humans.length >= MIN_HUMANS) {
+        startBtn.style.display = 'block';
+        startBtn.disabled = false;
+        startBtn.textContent = humans.length === 2 ? '开始游戏 (+AI)' : '开始游戏';
+    } else if (state.iAmHost) {
+        startBtn.style.display = 'block';
+        startBtn.disabled = true;
+        startBtn.textContent = '至少需要 2 位玩家';
+    } else {
+        startBtn.style.display = 'none';
+    }
+
+    // Error
+    const errEl = document.getElementById('lobby-error');
+    if (state.error) { errEl.textContent = state.error; errEl.style.display = 'block'; }
+    else errEl.style.display = 'none';
+}
+
+function renderGame() {
+    const pub = state.pub;
+    if (!pub) return;
+    const players = pub.players;
+    const numP = players.length;
+
+    // Room code badge
+    const codeEl = document.getElementById('game-room-code');
+    codeEl.textContent = state.roomCode;
+    codeEl.className = 'room-code' + (state.copied ? ' copied' : '');
+
+    // My seat index
+    const mySeatIdx = players.findIndex(p => p && p.cid === CLIENT_ID);
+
+    // Table container
+    const table = document.getElementById('poker-table');
+    table.className = `table pcount-${numP}`;
+
+    // Clear old seats
+    table.querySelectorAll('.seat').forEach(el => el.remove());
+
+    // Create seats
+    players.forEach((p, gameIdx) => {
+        const visualIdx = mySeatIdx >= 0
+            ? (gameIdx - mySeatIdx + numP) % numP
+            : gameIdx;
+        const isMe = p.cid === CLIENT_ID;
+        const isActive = (gameIdx === pub.current) && pub.stage >= 0 && pub.stage < 4
+            && !p.folded && !p.allIn && !p.sittingOut;
+        const seatEl = document.createElement('div');
+        let cls = `seat vpos-${visualIdx}`;
+        if (isMe) cls += ' is-me';
+        if (isActive) cls += ' active';
+        if (p.folded) cls += ' folded';
+        if (p.sittingOut) cls += ' sitting-out';
+        if (p.winner) cls += ' winner-anim';
+        seatEl.className = cls;
+
+        // Profit
+        const profit = p.chips - p.buyIn;
+        let profitHtml, profitClass;
+        if (profit > 0) { profitHtml = `水上: +$${profit.toLocaleString()}`; profitClass = 'profit-up'; }
+        else if (profit < 0) { profitHtml = `水下: -$${Math.abs(profit).toLocaleString()}`; profitClass = 'profit-down'; }
+        else { profitHtml = '平水: $0'; profitClass = 'profit-even'; }
+
+        // Badges
+        let badges = '';
+        if (gameIdx === pub.dealer) badges += `<span class="badge badge-d">D</span>`;
+        if (gameIdx === (pub.dealer + 1) % numP) badges += `<span class="badge badge-sb">SB</span>`;
+        if (gameIdx === (pub.dealer + 2) % numP) badges += `<span class="badge badge-bb">BB</span>`;
+
+        // Cards: show face-up for me (from private hand) or at showdown (from pub.hand)
+        let cardsHtml = '';
+        if (isMe && state.myHand && state.myHand.handId === pub.handId) {
+            cardsHtml = state.myHand.cards.map(c => renderCardHtml(c, false)).join('');
+        } else if (p.hand && pub.showAll && !p.folded) {
+            cardsHtml = p.hand.map(c => renderCardHtml(c, false)).join('');
+        } else if (p.sittingOut) {
+            cardsHtml = '';
+        } else if (pub.stage >= 0 && !p.folded) {
+            cardsHtml = '<div class="card hidden">?</div><div class="card hidden">?</div>';
+        }
+
+        seatEl.innerHTML = `
+            <div class="player-info">${escapeHtml(p.name)}${p.isAI ? '<span class="ai-tag">[AI]</span>' : ''}${isMe ? ' (你)' : ''} ${badges}</div>
+            <div class="chips-display">$<span>${p.chips.toLocaleString()}</span></div>
+            <div class="profit-display ${profitClass}">${profitHtml}</div>
+            <div class="action-text">${escapeHtml(p.actStr || '')}</div>
+            <div class="cards-container">${cardsHtml}</div>
+        `;
+        table.appendChild(seatEl);
+    });
+
+    // Pot + community
+    document.getElementById('total-pot').textContent = pub.pot.toLocaleString();
+    document.getElementById('community-cards').innerHTML =
+        (pub.community || []).map(c => renderCardHtml(c, false)).join('');
+
+    // Game message
+    if (pub.msg) {
+        if (!window._lastShownMsgId || window._lastShownMsgId !== pub.msgId) {
+            logMsg(pub.msg);
+            window._lastShownMsgId = pub.msgId;
+        }
+    }
+
+    // Controls — only enabled when it's my turn
+    const myPubIdx = players.findIndex(p => p && p.cid === CLIENT_ID);
+    const isMyTurn = myPubIdx >= 0 && pub.current === myPubIdx
+        && pub.stage >= 0 && pub.stage < 4
+        && !players[myPubIdx].folded && !players[myPubIdx].allIn;
+    if (isMyTurn) {
+        enableActionControls(players[myPubIdx], pub);
+    } else {
+        disableActionControls();
+    }
+
+    resizeGame();
+}
+
+function renderCardHtml(c, hidden) {
+    if (!c) return '';
+    if (hidden) return '<div class="card hidden">?</div>';
+    const color = (c.suit === '♥' || c.suit === '♦') ? 'red' : 'black';
+    return `<div class="card ${color}">${c.suit}${c.value}</div>`;
+}
+
+function escapeHtml(s) {
+    return String(s || '').replace(/[&<>"]/g, m => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[m]));
+}
+
+function enableActionControls(me, pub) {
+    const controls = document.getElementById('action-controls');
+    controls.classList.remove('disabled');
+
+    const amountToCall = pub.maxBet - me.curBet;
+    document.getElementById('btn-fold').disabled = false;
+
+    const callBtn = document.getElementById('btn-call');
+    callBtn.disabled = false;
+    callBtn.textContent = amountToCall === 0 ? '过牌 (Check)' : `跟注 (Call $${amountToCall.toLocaleString()})`;
+
+    const raiseBtn = document.getElementById('btn-raise');
+    const slider = document.getElementById('bet-slider');
+
+    if (me.chips > amountToCall) {
+        raiseBtn.disabled = false;
+        let minRaiseTo = pub.maxBet * 2;
+        if (minRaiseTo === 0) minRaiseTo = BLIND_BB * 2;
+        slider.min = minRaiseTo;
+        slider.max = me.chips + me.curBet;
+        slider.value = minRaiseTo;
+        updateSliderUI(slider.value);
+    } else {
+        raiseBtn.disabled = true;
+        slider.value = 0;
+        updateSliderUI(0);
+    }
+
+    updateGTOAdvice(me, pub);
+    logMsg('👉 轮到你行动了！');
+}
+
+function disableActionControls() {
+    document.getElementById('action-controls').classList.add('disabled');
+    document.getElementById('gto-content').innerHTML =
+        '<div style="color:#bdc3c7; font-size:14px;">等待行动...</div>';
+}
+
+function updateSliderUI(v) {
+    document.getElementById('slider-val').textContent = parseInt(v).toLocaleString();
+}
+
+function updateGTOAdvice(me, pub) {
+    if (!state.myHand || state.myHand.handId !== pub.handId) return;
+    const gto = document.getElementById('gto-content');
+    const amountToCall = pub.maxBet - me.curBet;
+    const potOdds = (pub.pot + amountToCall) > 0 ? amountToCall / (pub.pot + amountToCall) : 0;
+    const equity = evaluateBotStrength(state.myHand.cards, pub.community);
+
+    let action = '', sizing = '-';
+    if (pub.stage === 0) {
+        if (equity > 0.7) { action = '加注 (Raise)'; sizing = '3x - 4x BB'; }
+        else if (equity > 0.4) { action = '跟注 (Call)'; }
+        else { action = '弃牌 (Fold)'; }
+    } else {
+        if (equity > 0.75) { action = '价值加注 (Value Bet)'; sizing = '60% - 100% Pot'; }
+        else if (equity > potOdds + 0.1) { action = '跟注 (Call)'; }
+        else if (amountToCall === 0) { action = '过牌 (Check)'; }
+        else if (Math.random() < 0.15) { action = '诈唬加注 (Bluff)'; sizing = '75% - 120% Pot'; }
+        else { action = '弃牌 (Fold)'; }
+    }
+
+    gto.innerHTML = `
+        <div class="gto-item">手牌预估胜率: <span class="gto-value">${(equity * 100).toFixed(1)}%</span></div>
+        <div class="gto-item">当前底池赔率: <span class="gto-value">${(potOdds * 100).toFixed(1)}%</span></div>
+        <div class="gto-item" style="margin-top:15px;">推荐最优动作:</div>
+        <div class="gto-item"><span class="gto-action">${action}</span></div>
+        <div class="gto-item">推荐下注尺度: <span class="gto-value">${sizing}</span></div>
+    `;
+}
+
+// ==========================================================
+// UI scaling for narrow screens
+// ==========================================================
+function resizeGame() {
+    const table = document.getElementById('poker-table');
+    const wrapper = document.getElementById('table-wrapper');
+    if (!table || !wrapper) return;
+    const screenW = window.innerWidth;
+    if (screenW < 1050) {
+        const scale = Math.min(screenW / 1050, 1);
+        table.style.transform = `scale(${scale})`;
+        table.style.transformOrigin = 'top center';
+        wrapper.style.height = (600 * scale) + 'px';
+    } else {
+        table.style.transform = 'none';
+        wrapper.style.height = '600px';
+    }
+}
+window.addEventListener('resize', resizeGame);
+
+// ==========================================================
+// ERROR HANDLING
+// ==========================================================
+function showError(msg) {
+    state.error = msg;
+    render();
+    setTimeout(() => { state.error = ''; render(); }, 5000);
+}
+
+// ==========================================================
+// COPY UTIL
+// ==========================================================
+function copyRoomCode() {
+    if (!state.roomCode) return;
+    const txt = state.roomCode;
+    const fb = () => {
+        const ta = document.createElement('textarea');
+        ta.value = txt; ta.style.position = 'fixed'; ta.style.left = '-9999px';
+        document.body.appendChild(ta); ta.select();
+        try { document.execCommand('copy'); } catch (e) {}
+        document.body.removeChild(ta);
+    };
+    if (navigator.clipboard && window.isSecureContext) {
+        navigator.clipboard.writeText(txt).catch(fb);
+    } else fb();
+    state.copied = true;
+    render();
+    setTimeout(() => { state.copied = false; render(); }, 1800);
+}
+
+// ==========================================================
+// WIRING
+// ==========================================================
+document.getElementById('btn-create-room').addEventListener('click', () => {
+    const name = sanitizeName(document.getElementById('name-input').value);
+    if (!name || name === 'Player') {
+        document.getElementById('name-input').focus();
+        showError('请输入昵称');
+        return;
+    }
+    if (state.mqttStatus !== 'connected') {
+        showError('正在连接服务器，请稍候…'); return;
+    }
+    hostCreateRoom(name);
+});
+
+document.getElementById('btn-join-room').addEventListener('click', () => {
+    const name = sanitizeName(document.getElementById('name-input').value);
+    const code = document.getElementById('code-input').value.toUpperCase().trim();
+    if (!name || name === 'Player') { showError('请输入昵称'); return; }
+    if (code.length !== 6) { showError('房间号应为 6 位'); return; }
+    if (state.mqttStatus !== 'connected') { showError('正在连接服务器…'); return; }
+    joinRoomFlow(code, name);
+});
+
+document.getElementById('code-input').addEventListener('input', (e) => {
+    e.target.value = e.target.value.toUpperCase().replace(/[^A-Z0-9]/g, '');
+});
+
+document.getElementById('btn-leave-lobby').addEventListener('click', leaveRoomClient);
+document.getElementById('btn-leave-game').addEventListener('click', () => {
+    if (confirm('确定要离开牌局吗？')) leaveRoomClient();
+});
+document.getElementById('btn-start-game').addEventListener('click', hostStartGame);
+
+document.getElementById('lobby-code-display').addEventListener('click', copyRoomCode);
+document.getElementById('game-room-code').addEventListener('click', copyRoomCode);
+
+document.getElementById('bet-slider').addEventListener('input', (e) => updateSliderUI(e.target.value));
+document.getElementById('btn-fold').addEventListener('click', () => sendAction('fold'));
+document.getElementById('btn-call').addEventListener('click', () => sendAction('call'));
+document.getElementById('btn-raise').addEventListener('click', () => sendAction('raise'));
+
+// Auto-join via URL hash: #CODE
+(function checkHashJoin() {
+    const hash = (location.hash || '').replace(/^#/, '').toUpperCase().trim();
+    if (/^[A-Z0-9]{6}$/.test(hash)) {
+        document.getElementById('code-input').value = hash;
+    }
+})();
+
+// Cleanup on unload
+window.addEventListener('beforeunload', () => {
+    if (state.roomCode && !state.iAmHost) {
+        try {
+            publish(topicAction(state.roomCode), { type: 'leave', cid: CLIENT_ID });
+        } catch (e) {}
+    }
+    if (state.iAmHost && state.roomCode) {
+        // Try to clear retained state so room doesn't linger
+        try {
+            publish(topicState(state.roomCode), { v: 999999, phase: 'ended', players: [] }, { retain: true });
+        } catch (e) {}
+    }
+});
+
+// ==========================================================
+// INIT
+// ==========================================================
+if (typeof mqtt === 'undefined') {
+    document.body.innerHTML =
+        '<div style="padding:3rem; text-align:center; color:#e74c3c; font-size:16px;">' +
+        '⚠️ 无法加载 MQTT 客户端库。请检查网络连接后刷新页面。</div>';
+} else {
+    connectMqtt();
+    setTimeout(resizeGame, 100);
+    render();
+}
+</script>
+</body>
+</html>
